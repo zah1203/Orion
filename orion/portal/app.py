@@ -1,5 +1,7 @@
 """Same-origin private pilot dashboard. Accounts are provisioned by an operator."""
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 import hmac
 import json
 import os
@@ -14,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .store import Store
 from .service import Accounts
+from .connections import Connections, ConnectionError, connection_lease
 
 STATIC = Path(__file__).parent / "static"
 PRODUCTS = {"NIFTY", "BANKNIFTY", "GOLDM", "GOLD", "SILVERM", "SILVER", "CRUDEOIL", "CRUDEOILM"}
@@ -60,6 +63,22 @@ class Credentials(Strict):
     telegram_api_hash: str | None = Field(default=None, max_length=100)
 
 
+class TelegramStart(Strict):
+    phone: str = Field(pattern=r"^\+[1-9][0-9]{6,14}$")
+
+
+class TelegramCode(Strict):
+    code: str = Field(pattern=r"^[0-9]{5,8}$")
+
+
+class TelegramPassword(Strict):
+    password: str = Field(min_length=1, max_length=256)
+
+
+class KotakVerify(Strict):
+    totp: str = Field(pattern=r"^[0-9]{6}$")
+
+
 def create_app(root, key, origin):
     parsed = urlsplit(origin)
     if parsed.path or parsed.query or parsed.fragment or parsed.username:
@@ -70,7 +89,31 @@ def create_app(root, key, origin):
     os.umask(0o077)
     store = Store(root, key)
     accounts = Accounts(store, defaults())
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    connections = Connections(store)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async def cleanup():
+            while True:
+                await asyncio.sleep(30)
+                connections.expire()
+
+        task = asyncio.create_task(cleanup())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            connections.pending.clear()
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.state.connections = connections
+
+    @app.exception_handler(ConnectionError)
+    async def connection_error(request, exc):
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
     app.state.store = store
     app.state.accounts = accounts
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[parsed.hostname])
@@ -136,7 +179,8 @@ def create_app(root, key, origin):
 
     @app.post("/api/logout")
     def logout(request: Request):
-        identity(request, True)
+        session = identity(request, True)
+        connections.cancel(session["user_id"])
         store.logout(request.cookies["orion_session"])
         response = JSONResponse({"ok": True})
         response.delete_cookie("orion_session", path="/")
@@ -184,11 +228,48 @@ def create_app(root, key, origin):
     def credentials(body: Credentials, request: Request):
         uid = identity(request, True)["user_id"]
         patch = body.model_dump(exclude_unset=True)
-        with store.lock(uid):
-            if store.worker_running(uid) or store.user(uid)["enabled"]:
+        with connection_lease(store, uid), store.lock(uid):
+            if store.user(uid)["enabled"]:
                 raise HTTPException(409, "Pause entries and stop the worker before updating credentials")
             store.save_credentials(uid, patch)
+            if any(k.startswith("telegram_") for k in patch):
+                connections.cancel(uid)
         return store.credential_status(uid)
+
+    @app.get("/api/connections")
+    async def connection_status(request: Request):
+        session = identity(request)
+        return connections.status(session["user_id"], session["csrf"])
+
+    @app.post("/api/connections/telegram/start")
+    async def telegram_start(body: TelegramStart, request: Request):
+        session = identity(request, True)
+        return await connections.telegram(session["user_id"], session["csrf"], "start", body.phone)
+
+    @app.post("/api/connections/telegram/code")
+    async def telegram_code(body: TelegramCode, request: Request):
+        session = identity(request, True)
+        return await connections.telegram(session["user_id"], session["csrf"], "code", body.code)
+
+    @app.post("/api/connections/telegram/password")
+    async def telegram_password(body: TelegramPassword, request: Request):
+        session = identity(request, True)
+        return await connections.telegram(session["user_id"], session["csrf"], "password", body.password)
+
+    @app.post("/api/connections/telegram/cancel")
+    async def telegram_cancel(request: Request):
+        session = identity(request, True)
+        return await connections.telegram(session["user_id"], session["csrf"], "cancel")
+
+    @app.post("/api/connections/telegram/channels")
+    async def telegram_channels(request: Request):
+        session = identity(request, True)
+        return await connections.telegram(session["user_id"], session["csrf"], "channels")
+
+    @app.post("/api/connections/kotak/verify")
+    async def kotak_verify(body: KotakVerify, request: Request):
+        session = identity(request, True)
+        return await connections.kotak(session["user_id"], body.totp)
 
     @app.post("/api/control")
     def control(body: Control, request: Request):

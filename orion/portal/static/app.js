@@ -17,7 +17,7 @@ async function refresh(fill=false){
  const data=await api('/api/me');current=data;csrf=data.csrf;$('#login-view').hidden=true;$('#dashboard').hidden=false;$('#logout').hidden=false;
  $('#greeting').textContent=`WELCOME, ${data.username}`;$('#cash').textContent=money(data.state.cash);$('#entry-state').textContent=data.enabled?'Enabled':'Paused';$('#worker-state').textContent=data.worker_online?'Online · paper':'Offline';
  $('#enable').disabled=data.enabled;$('#pause').disabled=!data.enabled;
- $('#connections').textContent=`Saved: ${data.credentials.saved_fields.join(', ')||'none'}. Telegram: ${data.credentials.telegram_linked?'authorized session saved':'not linked'}. Broker: ${data.worker_online?'paper worker online; inspect its authentication logs':'not authenticated by this dashboard'}.`;
+ await refreshConnections();
  if(fill)fillSettings(data.settings);
  renderPnl(data.pnl);
  $('#history').replaceChildren();for(const event of data.history){const el=document.createElement('p');el.className='activity';el.textContent=`${event.at} · ${event.event}${event.signal_id?' · '+event.signal_id:''}`;$('#history').append(el);}
@@ -25,10 +25,8 @@ async function refresh(fill=false){
 }
 function bind(selector,fn){$(selector).addEventListener('click',async e=>{e.preventDefault();const button=e.currentTarget;button.disabled=true;try{await fn();}catch(err){notice(err.message,true);}finally{button.disabled=false;}});}
 $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;try{const d=await api('/api/login','POST',{username:form.username.value,password:form.password.value});csrf=d.csrf;form.password.value='';await refresh(true);notice('Signed in.');}catch(err){form.password.value='';notice(err.message,true);}});
-bind('#logout',async()=>{await api('/api/logout','POST',{});csrf='';current=null;$('#dashboard').hidden=true;$('#login-view').hidden=false;$('#logout').hidden=true;$('#credentials-form').reset();$('#demo-result').textContent='';notice('Signed out.');});
+bind('#logout',async()=>{await api('/api/logout','POST',{});csrf='';current=null;$('#dashboard').hidden=true;$('#login-view').hidden=false;$('#logout').hidden=true;resetConnections();$('#demo-result').textContent='';notice('Signed out.');});
 $('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,body={};for(const key of numericFields)body[key]=Number(form.elements[key].value);body.index_channel=form.index_channel.value.trim();body.commodity_channel=form.commodity_channel.value.trim();body.products=[...document.querySelectorAll('[name=product]:checked')].map(i=>i.value);try{await api('/api/settings','PUT',body);await refresh(true);notice('Settings saved.');}catch(err){notice(err.message,true);}});
-$('#credentials-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,body={};for(const key of credentialFields)if(form.elements[key].value)body[key]=form.elements[key].value;try{await api('/api/credentials','PUT',body);form.reset();await refresh();notice('Credentials saved. Authentication is a separate step.');}catch(err){notice(err.message,true);}});
-bind('#clear-credentials',async()=>{if(!confirm('Remove your saved API credentials and Telegram authorization?'))return;await api('/api/credentials','PUT',Object.fromEntries(credentialFields.map(k=>[k,null])));$('#credentials-form').reset();await refresh();notice('Saved credentials removed.');});
 for(const [id,enabled] of [['#enable',true],['#pause',false]])bind(id,async()=>{await api('/api/control','POST',{enabled});await refresh();notice(enabled?'Paper entries enabled. An authenticated worker must be online to receive calls.':'New entries paused. Open paper positions still need a running worker.');});
 bind('#demo',async()=>{const d=await api('/api/demo','POST',{});$('#demo-result').hidden=false;$('#demo-result').textContent=d.note+'\n\n'+d.events.map(x=>JSON.stringify(x)).join('\n')+'\n\nFinal demo cash: '+money(d.state.cash);});
 refresh(true).catch(()=>{});
@@ -49,3 +47,69 @@ function renderPnl(pnl){
  for(const p of trades){const tr=document.createElement('tr');for(const value of [`${p.symbol} · ${p.strike} ${p.option_type} · ${p.expiry}`,p.status,p.remaining,p.entry,p.stop,money(p.realized),money(p.unrealized),money(p.total),p.quote_time?`${p.bid} · ${p.quote_time} (${p.mark_status})`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}$('#positions').append(tr);}
 }
 $('#instrument-filter').addEventListener('change',()=>{if(current)renderPnl(current.pnl);});
+
+function resetConnections(){
+ for(const id of ['telegram-credentials','kotak-credentials','telegram-start','telegram-code','telegram-password','kotak-verify'])$('#'+id).reset();
+ $('#channel-picker').hidden=true;
+ for(const id of ['index-picker','commodity-picker'])$('#'+id).replaceChildren();
+}
+async function refreshConnections(){
+ const d=await api('/api/connections');
+ const fields=current.credentials.saved_fields;
+ $('#telegram-status').textContent=`${fields.includes('telegram_api_id')&&fields.includes('telegram_api_hash')?'API details saved.':'Save API ID and hash first.'} ${d.telegram.linked?'Authorized session saved.':'Not linked.'}${d.telegram.checked_at?' Last checked: '+new Date(d.telegram.checked_at*1000).toLocaleString():''}`;
+ $('#kotak-status').textContent=d.kotak.checked_at?'Authentication verified at '+new Date(d.kotak.checked_at*1000).toLocaleString()+'. This is a past check, not an active worker connection.':(fields.some(k=>k.startsWith('kotak_'))?'Credentials saved; not validated.':'Save Kotak credentials first.');
+ $('#telegram-code').hidden=d.telegram.step!=='code';
+ $('#telegram-password').hidden=d.telegram.step!=='password';
+ $('#telegram-cancel').hidden=!['code','password'].includes(d.telegram.step);
+ $('#telegram-start').hidden=d.telegram.linked||['code','password'].includes(d.telegram.step);
+ $('#telegram-channels').disabled=!d.telegram.linked;
+}
+function connectionForm(id,fn){
+ $('#'+id).addEventListener('submit',async e=>{
+  e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');button.disabled=true;
+  const feedback=$('#'+id.split('-')[0]+'-feedback');feedback.textContent='Working…';
+  try{await fn(form);feedback.textContent=$('#notice').textContent;feedback.className='ok';}catch(err){notice(err.message,true);feedback.textContent=err.message;feedback.className='error';}finally{button.disabled=false;if(current)refreshConnections().catch(()=>{});}
+ });
+}
+for(const provider of ['telegram','kotak']){
+ connectionForm(provider+'-credentials',async form=>{
+  const body={};for(const key of credentialFields.filter(k=>k.startsWith(provider+'_')))if(form.elements[key].value)body[key]=form.elements[key].value.trim();
+  if(!Object.keys(body).length)throw new Error('Enter credentials to save. Blank fields preserve existing values.');
+  await api('/api/credentials','PUT',body);form.reset();if(provider==='telegram')$('#channel-picker').hidden=true;
+  await refresh();notice(provider==='telegram'?'Telegram details saved. Connect Telegram below.':'Kotak details saved. Enter a fresh TOTP to validate.');
+ });
+ bind('#'+provider+'-remove',async()=>{
+  if(!confirm('Remove saved '+provider+' credentials?'))return;
+  await api('/api/credentials','PUT',Object.fromEntries(credentialFields.filter(k=>k.startsWith(provider+'_')).map(k=>[k,null])));
+  $('#'+provider+'-credentials').reset();if(provider==='telegram')resetConnections();await refresh();notice('Saved '+provider+' credentials removed.');
+ });
+}
+connectionForm('telegram-start',async form=>{
+ await api('/api/connections/telegram/start','POST',{phone:form.phone.value.trim()});form.reset();await refreshConnections();notice('Login code requested. Check Telegram.');
+});
+for(const step of ['code','password'])connectionForm('telegram-'+step,async form=>{
+ const value=form.elements[step].value;form.elements[step].value='';
+ const d=await api('/api/connections/telegram/'+step,'POST',{[step]:value});await refresh();
+ notice(d.step==='password'?'Enter your Telegram two-step password.':'Telegram linked. Click Check connection & load channels.');
+});
+bind('#telegram-cancel',async()=>{await api('/api/connections/telegram/cancel','POST',{});$('#telegram-code').reset();$('#telegram-password').reset();await refreshConnections();notice('Login cancelled.');});
+bind('#telegram-channels',async()=>{
+ const d=await api('/api/connections/telegram/channels','POST',{});
+ for(const id of ['index-picker','commodity-picker']){
+  const select=$('#'+id);select.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='Choose a channel';select.append(empty);
+  for(const c of d.channels){const option=document.createElement('option');option.value=c.id;option.textContent=c.title+' ('+c.id+')';select.append(option);}
+ }
+ $('#channel-note').textContent=d.channels.length?d.note:'No broadcast channels found. Join your providers’ channels in Telegram, then reload.';
+ $('#channel-picker').hidden=false;await refresh();notice('Telegram connection checked. Choose your channels.');
+});
+bind('#use-channels',async()=>{
+ const index=$('#index-picker').value,commodity=$('#commodity-picker').value;
+ if(!index&&!commodity)throw new Error('Choose at least one channel.');
+ if(index&&index===commodity)throw new Error('Choose different channels for index and commodity formats.');
+ const form=$('#settings-form');if(index)form.index_channel.value=index;if(commodity)form.commodity_channel.value=commodity;
+ notice('Channel IDs filled in. Select instruments, then click Save settings.');form.scrollIntoView({behavior:'smooth',block:'start'});
+});
+connectionForm('kotak-verify',async form=>{
+ const totp=form.totp.value;form.totp.value='';notice('Checking Kotak authentication…');
+ const d=await api('/api/connections/kotak/verify','POST',{totp});await refresh();notice(d.message);
+});
