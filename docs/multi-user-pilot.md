@@ -6,7 +6,7 @@ This adds a private dashboard to the existing Orion repository. Each user has a 
 
 - Operator-provisioned accounts; no public signup, email delivery or password-recovery service.
 - Kotak only and two existing complete-message parser profiles. A different provider format still needs parser work.
-- Browser users can save credentials and enable/pause entries. Operator-assisted Telegram login and daily Kotak TOTP authentication are still required per user.
+- Browser users can save credentials, complete Telegram login, select channels, validate Kotak with TOTP, and enable/pause entries. Starting the daily paper worker still requires the operator.
 - One separately authenticated paper worker process per user. Enabling entries in the dashboard does not launch a worker.
 - BTST/overnight calls remain review-only. Selecting a commodity does not activate overnight trading.
 - User data is logically isolated by application authentication and per-account files. This is a trusted single-host pilot, not OS/container isolation between mutually untrusted customers.
@@ -48,13 +48,13 @@ An account starts with no configured channels. Each selected instrument group ne
 
 ## Per-user Telegram authorization
 
-After the user saves Telegram API ID/hash, the operator starts an interactive login for that account:
+Use the browser connection setup below. As an optional fallback, after the user saves Telegram API ID/hash the operator can start an interactive login:
 
 ```bash
 python -m orion.portal telegram-login --username alice
 ```
 
-Telethon prompts for the Telegram phone number, login code and any Telegram 2FA password. Run this in a private operator session with the account owner. The resulting StringSession is encrypted in that user's credential record; it is not written as a plaintext `.session` file. API ID/hash changes invalidate the stored Telegram session. This is operator-assisted onboarding, not a completed browser-based Telegram sign-in flow.
+Telethon prompts for the Telegram phone number, login code and any Telegram 2FA password. Run this in a private operator session with the account owner. The resulting StringSession is encrypted in that user's credential record; it is not written as a plaintext `.session` file. API ID/hash changes invalidate the stored Telegram session. This CLI fallback is optional; the browser supports the same login steps.
 
 ## Per-user Kotak paper worker
 
@@ -120,9 +120,9 @@ Stop account workers before releasing code that changes the portal/engine. The d
 
 ## Verification
 
-42 tests pass locally: the existing 25 engine tests plus 17 tests for login/session behavior, CSRF and Origin checks, authorization, encrypted credentials, ownership binding, request limits, independent sizing/deduplication/state, restart persistence, isolated settings, logout, login throttling and pause behavior. The app is also exercised through ASGI HTTP requests without requiring a live broker connection.
+63 tests pass locally: 25 engine tests, 9 P&L tests, 12 connection tests and 17 tests for login/session behavior, CSRF and Origin checks, authorization, encrypted credentials, ownership binding, request limits, independent sizing/deduplication/state, restart persistence, isolated settings, logout, login throttling and pause behavior. The app is also exercised through ASGI HTTP requests without requiring a live broker connection.
 
-The tests use synthetic quotes. Two actual Kotak/Telegram accounts, concurrent live feeds, broker entitlements, production hosting and visual browser behavior remain to be tested during the pilot. No production-readiness claim is made.
+The tests use synthetic quotes. Two actual Kotak/Telegram accounts, concurrent live feeds, broker entitlements, production hosting remain to be tested during the pilot. Connection flows have automated coverage with fake providers; visual browser and real-provider validation are still required. No production-readiness claim is made.
 
 References: [FastAPI security](https://fastapi.tiangolo.com/tutorial/security/), [Fernet authenticated encryption](https://cryptography.io/en/latest/fernet/).
 
@@ -135,3 +135,50 @@ Realized P&L includes charged simulation fees, including the entry fee for an op
 Quotes are persisted with their timestamps. Missing marks make open/total P&L unavailable; stale or closed-market marks remain visible as last-known estimates with a warning. Legacy ledgers gain marks on the next valid quote. The dashboard refreshes every 15 seconds, and freshness describes the time of the report. These figures are simulated accounting, not broker-confirmed P&L.
 
 The suite now includes 51 tests, including nine P&L accounting/price-quality tests and an expanded cross-user P&L isolation assertion.
+
+## Browser connection setup
+
+The dashboard now has separate Telegram and Kotak credential forms and checks.
+Existing encrypted credentials and account databases remain compatible.
+
+1. Pause entries and stop any account worker before changing or checking connections.
+2. Save Telegram API ID/hash, enter the phone number with country code, and select
+   **Connect Telegram**. Enter the delivered code and two-step password if requested.
+   Login expires after five minutes; a dashboard restart requires starting an unfinished
+   login again. Completed sessions remain encrypted in the existing vault.
+3. Select **Check connection & load channels**. Pick the index and/or commodity
+   broadcast channels, select **Use selected channels**, then choose instruments and
+   **Save settings**. The two existing provider formats still apply. Discovery inspects
+   up to 500 dialogs and returns only broadcast channel titles/IDs, not message bodies.
+4. Separately save Kotak token, registered mobile with country code, UCC and MPIN.
+   Whitelist the server Elastic IP in Neo, then enter a fresh authenticator TOTP and
+   select **Validate Kotak connection**. A successful timestamp means both TOTP login
+   and MPIN validation succeeded at that time. No order is placed. The short-lived
+   probe's broker tokens are not stored, and this does not start the worker or verify
+   market-data entitlements. The operator worker still needs fresh authentication.
+
+Pending Telegram login state is encrypted in process memory, bound to the user and
+browser login session, and expires automatically. Codes and two-step passwords are
+not persisted. Credential changes invalidate prior checks; Telegram API changes also
+invalidate the saved Telegram session. Removing local credentials does not revoke
+sessions at the provider; use Telegram Devices if provider-side revocation is needed.
+Checks use the same worker lease as CLI authentication to prevent simultaneous use.
+The portal must continue running with **one Uvicorn worker**, as shipped. Provider
+rate limits are supplemented by per-user limits persisted in SQLite.
+
+### Deploy this update
+
+Merge the connection UI PR, then run **Deploy paper application** on `main` with the
+existing AWS variables. Do not rerun Terraform just for this application update.
+Stop any interactive account workers first. The installer preserves `/etc/orion`
+and `/var/lib/orion` and leaves both services stopped. Do not regenerate the vault key
+or recreate existing users. After the workflow succeeds, run on EC2:
+
+```bash
+sudo systemctl start orion-portal
+sudo systemctl status orion-portal --no-pager
+```
+
+Keep/reopen the Mac SSM tunnel and reload the dashboard. Re-entering already-saved
+credentials is unnecessary. Automated tests use fake providers;
+real Telegram login and Kotak validation must be verified privately after deployment.

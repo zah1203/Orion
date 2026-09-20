@@ -167,9 +167,15 @@ class Store:
 
     def save_credentials(self, uid, patch):
         values = self.credentials(uid)
+        if any(
+            k.startswith("kotak_") and k != "kotak_checked_at" and v != values.get(k)
+            for k, v in patch.items()
+        ):
+            values.pop("kotak_checked_at", None)
         # API ID/hash replacement invalidates any existing Telegram authorization.
         if any(k in patch and patch[k] != values.get(k) for k in ("telegram_api_id", "telegram_api_hash")):
             values.pop("telegram_session", None)
+            values.pop("telegram_checked_at", None)
         for k, v in patch.items():
             if v is None:
                 values.pop(k, None)
