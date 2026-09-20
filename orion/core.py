@@ -279,6 +279,11 @@ class Engine:
         if not (0 < bid <= ask and ltp > 0):
             return emit("INVALID_QUOTE", token=e["token"])
         s["last_quotes"][token_key] = e["source_time"]
+        s.setdefault("marks", {})[token_key] = {
+            "bid": str(bid),
+            "source_time": e["source_time"],
+            "market_open": e.get("market_open", False),
+        }
         today = now.astimezone(IST).date().isoformat()
         day = s["days"].setdefault(today, {"pnl": "0", "entries": 0})
         for key, p in s["positions"].items():

@@ -10,7 +10,7 @@ async function api(path,method='GET',body){
  const r=await fetch(path,{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body)});
  const data=await r.json(); if(!r.ok){if(r.status===401){current=null;$('#dashboard').hidden=true;$('#login-view').hidden=false;$('#logout').hidden=true;}throw new Error(typeof data.detail==='string'?data.detail:'Request failed');}return data;
 }
-function money(value){return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR'}).format(Number(value||0));}
+function money(value){if(value===null||value===undefined)return 'Unavailable';return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR'}).format(Number(value||0));}
 for(const product of instruments){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=product;input.name='product';label.append(input,document.createTextNode(product));$('#products').append(label);}
 function fillSettings(settings){const form=$('#settings-form');for(const key of numericFields)form.elements[key].value=settings[key];form.elements.index_channel.value='';form.elements.commodity_channel.value='';const products=new Set();for(const [id,c] of Object.entries(settings.channels)){form.elements[c.name==='index-options'?'index_channel':'commodity_channel'].value=id;c.products.forEach(p=>products.add(p));}document.querySelectorAll('[name=product]').forEach(i=>i.checked=products.has(i.value));}
 async function refresh(fill=false){
@@ -19,8 +19,7 @@ async function refresh(fill=false){
  $('#enable').disabled=data.enabled;$('#pause').disabled=!data.enabled;
  $('#connections').textContent=`Saved: ${data.credentials.saved_fields.join(', ')||'none'}. Telegram: ${data.credentials.telegram_linked?'authorized session saved':'not linked'}. Broker: ${data.worker_online?'paper worker online; inspect its authentication logs':'not authenticated by this dashboard'}.`;
  if(fill)fillSettings(data.settings);
- const positions=Object.values(data.state.positions);$('#empty').hidden=positions.length>0;$('#positions').replaceChildren();
- for(const p of positions){const row=document.createElement('tr');for(const value of [p.contract.symbol,p.status,p.remaining,p.entry_fill||'—',p.stop,money(p.pnl)]){const cell=document.createElement('td');cell.textContent=value;row.append(cell);}$('#positions').append(row);}
+ renderPnl(data.pnl);
  $('#history').replaceChildren();for(const event of data.history){const el=document.createElement('p');el.className='activity';el.textContent=`${event.at} · ${event.event}${event.signal_id?' · '+event.signal_id:''}`;$('#history').append(el);}
  if(!data.history.length)$('#history').textContent='Your account has no activity yet.';
 }
@@ -34,3 +33,19 @@ for(const [id,enabled] of [['#enable',true],['#pause',false]])bind(id,async()=>{
 bind('#demo',async()=>{const d=await api('/api/demo','POST',{});$('#demo-result').hidden=false;$('#demo-result').textContent=d.note+'\n\n'+d.events.map(x=>JSON.stringify(x)).join('\n')+'\n\nFinal demo cash: '+money(d.state.cash);});
 refresh(true).catch(()=>{});
 setInterval(()=>{if(current)refresh().catch(err=>notice(err.message,true));},15000);
+
+function colored(cell,value){if(value===null||value===undefined)return;cell.classList.toggle('gain',Number(value)>0);cell.classList.toggle('loss',Number(value)<0);}
+function renderPnl(pnl){
+ const filter=$('#instrument-filter');const chosen=filter.value;filter.replaceChildren();
+ for(const [value,label] of [['','All instruments'],...pnl.instruments.map(r=>[r.product,r.product])]){const o=document.createElement('option');o.value=value;o.textContent=label;filter.append(o);}filter.value=chosen;
+ const selected=pnl.instruments.find(r=>r.product===filter.value);const totals=selected||pnl.totals;
+ for(const [id,key] of [['#realized-pnl','realized'],['#open-pnl','unrealized'],['#total-pnl','total']]){const el=$(id);el.textContent=money(totals[key]);el.classList.remove('gain','loss');colored(el,totals[key]);}
+ const stale=totals.stale_positions,missing=totals.missing_positions;
+ $('#pnl-freshness').textContent=missing?`${missing} open position(s) have no accepted price. Open and total P&L are unavailable.`:stale?`${stale} open position(s) use stale prices. Open and total P&L are last-known estimates.`:totals.open_lots?'Prices were fresh when this report was generated.':'No open positions.';
+ $('#pnl-note').textContent=pnl.note;
+ const rows=pnl.instruments.filter(r=>!filter.value||r.product===filter.value);$('#instrument-pnl').replaceChildren();$('#pnl-empty').hidden=rows.length>0;
+ for(const r of rows){const tr=document.createElement('tr');for(const [value,key] of [[r.product,null],[r.trades,null],[r.open_lots,null],[money(r.realized),'realized'],[money(r.unrealized),'unrealized'],[money(r.total),'total'],[r.open_lots?r.mark_status:'closed',null]]){const td=document.createElement('td');td.textContent=value;if(key)colored(td,r[key]);tr.append(td);}$('#instrument-pnl').append(tr);}
+ const trades=pnl.positions.filter(r=>!filter.value||r.product===filter.value);$('#positions').replaceChildren();$('#empty').hidden=trades.length>0;
+ for(const p of trades){const tr=document.createElement('tr');for(const value of [`${p.symbol} · ${p.strike} ${p.option_type} · ${p.expiry}`,p.status,p.remaining,p.entry,p.stop,money(p.realized),money(p.unrealized),money(p.total),p.quote_time?`${p.bid} · ${p.quote_time} (${p.mark_status})`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}$('#positions').append(tr);}
+}
+$('#instrument-filter').addEventListener('change',()=>{if(current)renderPnl(current.pnl);});

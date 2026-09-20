@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 from ..core import Engine, dumps, stamp, dec
+from .reporting import report
 
 
 class Accounts:
@@ -40,6 +41,7 @@ class Accounts:
                 "worker_online": self.store.worker_alive(uid),
                 "state": state,
                 "history": history,
+                "pnl": report(state, user["settings"]["quote_max_age_seconds"]),
                 "mode": "paper",
             }
 

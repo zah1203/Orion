@@ -101,6 +101,10 @@ class PortalTests(unittest.TestCase):
         for event in self.events[3:]:
             self.accounts.process(self.alice, event, self.master, stamp(event["source_time"]), True)
         self.assertEqual(self.accounts.summary(self.bob)["state"], before)
+        alice_pnl = self.accounts.summary(self.alice)["pnl"]["totals"]
+        bob_pnl = self.accounts.summary(self.bob)["pnl"]["totals"]
+        self.assertEqual(alice_pnl["realized"], "785.0")
+        self.assertEqual(bob_pnl["realized"], "-25")
         self.assertEqual(
             self.accounts.process(
                 self.alice, self.events[0], self.master, stamp(self.events[0]["source_time"]), True

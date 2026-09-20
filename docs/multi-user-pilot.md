@@ -125,3 +125,13 @@ Stop account workers before releasing code that changes the portal/engine. The d
 The tests use synthetic quotes. Two actual Kotak/Telegram accounts, concurrent live feeds, broker entitlements, production hosting and visual browser behavior remain to be tested during the pilot. No production-readiness claim is made.
 
 References: [FastAPI security](https://fastapi.tiangolo.com/tutorial/security/), [Fernet authenticated encryption](https://cryptography.io/en/latest/fernet/).
+
+## Instrument P&L dashboard
+
+The dashboard shows realized, open and total paper P&L by exact instrument (for example GOLD and GOLDM remain separate), with a filter and individual option-contract rows showing strike, CE/PE and expiry. Results cover all recorded trades since the account started, not just today's trades. Pending and rejected signals are not counted as trades.
+
+Realized P&L includes charged simulation fees, including the entry fee for an open position. Open P&L is `(last accepted bid - actual simulated entry) × premium multiplier × remaining lots`; it excludes future exit fees. Partial exits reduce remaining lots so realized and open results are not counted twice. Equity is cash plus the marked value of remaining options.
+
+Quotes are persisted with their timestamps. Missing marks make open/total P&L unavailable; stale or closed-market marks remain visible as last-known estimates with a warning. Legacy ledgers gain marks on the next valid quote. The dashboard refreshes every 15 seconds, and freshness describes the time of the report. These figures are simulated accounting, not broker-confirmed P&L.
+
+The suite now includes 51 tests, including nine P&L accounting/price-quality tests and an expanded cross-user P&L isolation assertion.

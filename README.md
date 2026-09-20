@@ -6,7 +6,7 @@ A Python **paper-trading implementation** for two Telegram option-call channels,
 
 ## Multi-user dashboard
 
-The private multi-user pilot adds separate logins, encrypted Kotak/Telegram settings, per-user channels and risk limits, isolated paper ledgers, entry controls and trade history. See [multi-user setup](docs/multi-user-pilot.md). Operator-assisted Telegram authorization and daily Kotak TOTP are still required; saving API details does not authenticate an account. The dashboard does not submit real orders.
+The private multi-user pilot adds separate logins, encrypted Kotak/Telegram settings, per-user channels and risk limits, isolated paper ledgers, entry controls, instrument-level realized/open P&L and trade history. See [multi-user setup](docs/multi-user-pilot.md). Operator-assisted Telegram authorization and daily Kotak TOTP are still required; saving API details does not authenticate an account. The dashboard does not submit real orders.
 
 ## Try the original CLI locally
 
