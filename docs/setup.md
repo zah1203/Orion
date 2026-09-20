@@ -14,7 +14,7 @@ git remote add origin YOUR_PRIVATE_GITHUB_REPOSITORY_URL
 git push -u origin main
 ```
 
-Enable Actions and protect `main` with review and passing `Validate` checks. Do not give untrusted users write access: the main-branch OIDC role can change infrastructure and install executable code on the host. These workflows use major-version action tags; pin reviewed action commit SHAs in your repository before widening access. Workflow validation never receives cloud credentials on pull requests.
+Enable Actions and protect `main` with review and passing `Validate` checks. Do not give untrusted users write access: the main-branch OIDC role can change infrastructure and install executable code on the host. These workflows pin reviewed Node.js 24 action releases to full commit SHAs; review release notes and update those pins when upgrading actions. Workflow validation never receives cloud credentials on pull requests.
 
 ## 2. Bootstrap remote state once
 
