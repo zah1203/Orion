@@ -40,6 +40,7 @@ subprocess.run([python, "-m", "pip", "install", "--no-deps", str(release)], chec
 subprocess.run([python, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=release, check=True)
 # Only stop the old paper process after the new environment passes tests.
 subprocess.run(["systemctl", "stop", "orion.service"], check=False)
+subprocess.run(["systemctl", "stop", "orion-portal.service"], check=False)
 subprocess.run(
     ["install", "-m", "644", str(release / "scripts/orion.service"), "/etc/systemd/system/orion.service"],
     check=True,
@@ -48,5 +49,15 @@ new = Path("/opt/orion/current.new")
 new.unlink(missing_ok=True)
 new.symlink_to(release)
 new.replace("/opt/orion/current")
+subprocess.run(
+    [
+        "install",
+        "-m",
+        "644",
+        str(release / "scripts/orion-portal.service"),
+        "/etc/systemd/system/orion-portal.service",
+    ],
+    check=True,
+)
 subprocess.run(["systemctl", "daemon-reload"], check=True)
 print("Release installed. Service remains stopped; configure and authenticate before starting.")

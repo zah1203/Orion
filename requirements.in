@@ -1,3 +1,7 @@
 Telethon==1.45.0
 kotakneoapi==3.0.7
 boto3
+
+fastapi==0.141.1
+uvicorn==0.53.0
+cryptography==50.0.1
