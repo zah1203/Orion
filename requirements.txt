@@ -35,3 +35,11 @@ tzdata==2026.4
 urllib3==2.8.0
 websocket-client==1.9.2
 websockets==17.1
+fastapi==0.141.1
+uvicorn==0.53.0
+cryptography==50.0.1
+starlette==1.6.0
+annotated-doc==0.0.5
+click==8.5.0
+cffi==2.1.1
+pycparser==3.0

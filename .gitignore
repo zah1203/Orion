@@ -21,3 +21,7 @@ dist/
 build/
 *.egg-info/
 bootstrap-outputs.json
+
+*.key
+portal-data/
+accounts.db*

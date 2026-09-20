@@ -1,6 +1,7 @@
 """Live Telegram + Kotak inputs; all order fills remain simulated."""
 
 import asyncio
+from contextlib import nullcontext
 import getpass
 import hashlib
 import json
@@ -44,7 +45,17 @@ def read_totp():
     return code
 
 
-async def serve(config, master, db_path, session_path):
+async def serve(
+    config,
+    master,
+    db_path,
+    session_path,
+    *,
+    credentials_override=None,
+    totp_code=None,
+    config_provider=None,
+    account_lock=None,
+):
     from telethon import TelegramClient, events
     from neo_api_client import NeoAPI
     from neo_api_client.websocket.feed import WsToken, SFeedScrip, SFeedMarketStatus
@@ -59,15 +70,19 @@ async def serve(config, master, db_path, session_path):
         "CREATE TABLE IF NOT EXISTS source_events(id TEXT PRIMARY KEY, received_at TEXT, body TEXT)"
     )
     # Reset crossing observations on restart: do not bridge unobserved outages.
-    with engine.db:
+    with account_lock() if account_lock else nullcontext(), engine.db:
         s = engine.state()
         for p in s["positions"].values():
             if p["status"] == "PENDING":
                 p["status"] = "CANCELLED"
         engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
-    creds = credentials()
+    creds = credentials_override if credentials_override is not None else credentials()
     client = NeoAPI(consumer_key=creds["kotak_consumer_key"], environment="prod")
-    client.totp_login(mobile_number=creds["kotak_mobile"], ucc=creds["kotak_ucc"], totp=read_totp())
+    client.totp_login(
+        mobile_number=creds["kotak_mobile"],
+        ucc=creds["kotak_ucc"],
+        totp=totp_code if totp_code is not None else read_totp(),
+    )
     client.totp_validate(mpin=creds["kotak_mpin"])
     telegram = TelegramClient(session_path, int(creds["telegram_api_id"]), creds["telegram_api_hash"])
     await telegram.connect()
@@ -78,14 +93,17 @@ async def serve(config, master, db_path, session_path):
     market_status = {}
 
     def ingest(event):
-        now = datetime.now(timezone.utc)
-        with engine.db:
-            engine.db.execute(
-                "INSERT OR IGNORE INTO source_events VALUES(?,?,?)",
-                (event["event_id"], now.isoformat(), dumps(event)),
-            )
-        for result in engine.process(event, now):
-            print(dumps(result), flush=True)
+        with account_lock() if account_lock else nullcontext():
+            if config_provider:
+                engine.cfg = config_provider()
+            now = datetime.now(timezone.utc)
+            with engine.db:
+                engine.db.execute(
+                    "INSERT OR IGNORE INTO source_events VALUES(?,?,?)",
+                    (event["event_id"], now.isoformat(), dumps(event)),
+                )
+            for result in engine.process(event, now):
+                print(dumps(result), flush=True)
 
     async def message(event):
         if event.message.date < boot and not event.message.edit_date:
@@ -113,6 +131,8 @@ async def serve(config, master, db_path, session_path):
     async def watchdog():
         while True:
             await asyncio.sleep(15)
+            if config_provider:
+                engine.cfg = config_provider()
             now = datetime.now(timezone.utc)
             for p in engine.state()["positions"].values():
                 if p["status"] not in ("OPEN", "PENDING"):
@@ -151,7 +171,7 @@ async def serve(config, master, db_path, session_path):
                         k in last_quote
                         and (now - last_quote[k]).total_seconds() > config["quote_max_age_seconds"]
                     ):
-                        with engine.db:
+                        with account_lock() if account_lock else nullcontext(), engine.db:
                             s = engine.state()
                             for p in s["positions"].values():
                                 if (

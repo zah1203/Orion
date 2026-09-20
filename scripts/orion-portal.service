@@ -1,0 +1,25 @@
+[Unit]
+Description=Orion private multi-user paper dashboard
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/orion/portal.env
+ConditionPathExists=/etc/orion/portal.key
+
+[Service]
+Type=simple
+User=orion
+Group=orion
+WorkingDirectory=/opt/orion/current
+EnvironmentFile=/etc/orion/portal.env
+ExecStart=/opt/orion/current/.venv/bin/python -m uvicorn orion.portal.app:factory --factory --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers --no-access-log
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orion/portal
+
+[Install]
+WantedBy=multi-user.target

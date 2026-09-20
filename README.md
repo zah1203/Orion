@@ -1,12 +1,16 @@
-# Orion India v0.1
+# Orion India — paper pilot
 
 A Python **paper-trading implementation** for two Telegram option-call channels, with AWS Mumbai infrastructure and GitHub Actions deployment. Includes runnable local replay, a Telegram user-account listener, a Kotak Neo market-feed connector, exact contract matching, dynamic whole-lot sizing, target exits and persistent state.
 
 **No real orders can be submitted by this release.** It does not contain a broker order adapter. Changing `mode` to `live` raises an error. The feed integrations need authenticated account testing. The project is published to this repository and GitHub Actions validation passes; no AWS resources have been provisioned.
 
-## Try it locally
+## Multi-user dashboard
 
-Python 3.12 is required. The replay engine and tests use only Python's standard library; broker dependencies are needed for `serve` and cloud scripts.
+The private multi-user pilot adds separate logins, encrypted Kotak/Telegram settings, per-user channels and risk limits, isolated paper ledgers, entry controls and trade history. See [multi-user setup](docs/multi-user-pilot.md). Operator-assisted Telegram authorization and daily Kotak TOTP are still required; saving API details does not authenticate an account. The dashboard does not submit real orders.
+
+## Try the original CLI locally
+
+Python 3.12 is required. The replay engine and core tests use Python's standard library. Install requirements.txt for the complete test suite, dashboard, broker connectors and cloud scripts.
 
 ```bash
 python3 -m venv .venv

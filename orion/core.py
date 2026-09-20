@@ -232,6 +232,8 @@ class Engine:
             return emit("EDIT_REQUIRES_REVIEW", signal_id=key)
         if key in s["positions"]:
             return emit("DUPLICATE_MESSAGE", signal_id=key)
+        if not self.cfg.get("new_entries_enabled", True):
+            return emit("ENTRIES_PAUSED", signal_id=key)
         age = (now - stamp(e["source_time"])).total_seconds()
         if age < -5 or age > self.cfg["signal_max_age_seconds"]:
             return emit("STALE_SIGNAL", signal_id=key)
@@ -291,6 +293,10 @@ class Engine:
             local_time = now.astimezone(IST).strftime("%H:%M")
             cutoff = local_time >= self.cfg["channels"][key.split(":")[0]]["exit_time_ist"]
             if p["status"] == "PENDING":
+                if not self.cfg.get("new_entries_enabled", True):
+                    p["status"] = "CANCELLED"
+                    emit("ENTRIES_PAUSED", signal_id=key)
+                    continue
                 if (
                     expiry_cutoff
                     or cutoff
