@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=75,<83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orion-india"
+version = "0.1.0"
+description = "Telegram option signal parsing and deterministic paper execution"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["orion*"]
+
+[tool.ruff]
+line-length = 110

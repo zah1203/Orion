@@ -1,0 +1,6 @@
+{"event_id": "demo-message", "type": "message", "channel_id": "-1000000000001", "message_id": "1", "source_time": "2026-09-18T10:00:00+05:30", "text": "NIFTY 23450 PE\nBUY 170\nTGT 180/200/220\nSL 155"}
+{"event_id": "demo-quote-1", "type": "quote", "source_time": "2026-09-18T10:00:01+05:30", "segment": "nse_fo", "token": "TEST1", "bid": "169", "ask": "169.5", "ltp": "169", "market_open": true}
+{"event_id": "demo-quote-2", "type": "quote", "source_time": "2026-09-18T10:00:02+05:30", "segment": "nse_fo", "token": "TEST1", "bid": "170", "ask": "170.5", "ltp": "170", "market_open": true}
+{"event_id": "demo-quote-3", "type": "quote", "source_time": "2026-09-18T10:00:03+05:30", "segment": "nse_fo", "token": "TEST1", "bid": "180", "ask": "180.5", "ltp": "180", "market_open": true}
+{"event_id": "demo-quote-4", "type": "quote", "source_time": "2026-09-18T10:00:04+05:30", "segment": "nse_fo", "token": "TEST1", "bid": "200", "ask": "200.5", "ltp": "200", "market_open": true}
+{"event_id": "demo-quote-5", "type": "quote", "source_time": "2026-09-18T10:00:05+05:30", "segment": "nse_fo", "token": "TEST1", "bid": "220", "ask": "220.5", "ltp": "220", "market_open": true}

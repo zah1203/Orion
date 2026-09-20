@@ -1,0 +1,23 @@
+{
+  "mode": "paper",
+  "live_inputs_enabled": false,
+  "paper_cash": "100000",
+  "risk_per_trade": "1000",
+  "max_open_risk": "2000",
+  "daily_loss_limit": "2000",
+  "max_lots": 3,
+  "max_open_positions": 1,
+  "max_entries_per_day": 5,
+  "paper_fee_per_order": "25",
+  "signal_max_age_seconds": 120,
+  "quote_max_age_seconds": 5,
+  "entry_slippage_cap": "2",
+  "above_buffer": "1",
+  "max_spread_fraction": "0.02",
+  "expiry_exit_buffer_seconds": 1800,
+  "feed_timestamp_unit": "seconds",
+  "channels": {
+    "-1000000000001": {"name": "index-options", "products": ["NIFTY", "BANKNIFTY"], "allow_overnight": false, "exit_time_ist": "15:15"},
+    "-1000000000002": {"name": "commodity-options", "products": ["GOLDM", "SILVERM", "CRUDEOIL", "CRUDEOILM"], "allow_overnight": false, "exit_time_ist": "22:45"}
+  }
+}

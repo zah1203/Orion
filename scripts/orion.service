@@ -1,0 +1,29 @@
+[Unit]
+Description=Orion India live-input paper simulator
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/orion/config.json
+ConditionPathExists=/etc/orion/contracts.json
+ConditionPathExists=/var/lib/orion/telegram.session
+ConditionPathExists=/run/orion/totp
+
+[Service]
+Type=simple
+User=orion
+Group=orion
+WorkingDirectory=/opt/orion/current
+EnvironmentFile=/etc/orion/environment
+ExecStart=/opt/orion/current/.venv/bin/python -m orion serve --config /etc/orion/config.json --master /etc/orion/contracts.json --db /var/lib/orion/runtime/paper.db --session /var/lib/orion/telegram
+# Authentication consumes one-time code. Restart deliberately after investigating failures.
+Restart=no
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orion /run/orion
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

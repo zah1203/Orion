@@ -1,0 +1,19 @@
+{
+  "synthetic": true,
+  "as_of": "2026-09-18",
+  "contracts": [
+    {
+      "product": "NIFTY",
+      "strike": "23450",
+      "option_type": "PE",
+      "segment": "nse_fo",
+      "expiry": "2026-09-22",
+      "expiry_at": "2026-09-22T15:30:00+05:30",
+      "symbol": "SYNTHETIC-NIFTY-23450-PE",
+      "token": "TEST1",
+      "order_quantity_per_lot": 1,
+      "premium_multiplier": "10",
+      "tick_size": "0.05"
+    }
+  ]
+}

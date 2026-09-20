@@ -1,0 +1,38 @@
+#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y python3 python3-venv python3-pip git curl ca-certificates unzip chrony
+systemctl enable --now chrony
+id orion >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/orion --shell /usr/sbin/nologin orion
+install -d -o orion -g orion -m 700 /var/lib/orion /var/lib/orion/runtime
+install -d -m 755 /opt/orion /opt/orion/releases /etc/orion
+python3 -m venv /opt/orion/deploy-venv
+/opt/orion/deploy-venv/bin/pip install 'boto3>=1.35,<2'
+cat >/etc/orion/environment <<'ENV'
+AWS_REGION=ap-south-1
+ORION_SECRET_ARN=${secret_arn}
+ORION_TOTP_FILE=/run/orion/totp
+PYTHONUNBUFFERED=1
+ENV
+chmod 600 /etc/orion/environment
+cat >/etc/tmpfiles.d/orion.conf <<'CONF'
+d /run/orion 0700 orion orion -
+CONF
+systemd-tmpfiles --create /etc/tmpfiles.d/orion.conf
+mkdir -p /etc/systemd/journald.conf.d
+cat >/etc/systemd/journald.conf.d/orion.conf <<'CONF'
+[Journal]
+SystemMaxUse=200M
+MaxRetentionSec=14day
+CONF
+systemctl restart systemd-journald
+# Official Ubuntu EC2 image normally includes the SSM snap.
+if command -v snap >/dev/null && snap list amazon-ssm-agent >/dev/null 2>&1; then
+  snap start amazon-ssm-agent
+else
+  curl -fsSL https://s3.ap-south-1.amazonaws.com/amazon-ssm-ap-south-1/latest/debian_amd64/amazon-ssm-agent.deb -o /tmp/ssm.deb
+  dpkg -i /tmp/ssm.deb
+  systemctl enable --now amazon-ssm-agent
+fi
+# Bot service is installed by application deployment; never started by Terraform.

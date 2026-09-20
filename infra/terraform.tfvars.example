@@ -1,0 +1,5 @@
+instance_profile_name = "orion-india-ec2"
+secret_arn            = "arn:aws:secretsmanager:ap-south-1:123456789012:secret:orion-india/credentials-REPLACE"
+artifact_bucket       = "REPLACE-orion-artifacts"
+ami_id                = "ami-REPLACE"
+instance_type         = "t3.small"

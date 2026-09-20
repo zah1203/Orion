@@ -1,0 +1,23 @@
+name: Show AWS OIDC subject
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  subject:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Print only the non-secret identity claim
+        shell: python
+        run: |
+          import os, json, base64, urllib.request
+          url = os.environ['ACTIONS_ID_TOKEN_REQUEST_URL'] + '&audience=sts.amazonaws.com'
+          req = urllib.request.Request(url, headers={'Authorization': 'bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(req) as r:
+              token = json.load(r)['value']
+          payload = token.split('.')[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload+'='*(-len(payload)%4)))
+          print('Exact subject for bootstrap:', claims['sub'])
+          print('Audience:', claims['aud'])
