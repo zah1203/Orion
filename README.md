@@ -2,7 +2,7 @@
 
 A Python **paper-trading implementation** for two Telegram option-call channels, with AWS Mumbai infrastructure and GitHub Actions deployment. Includes runnable local replay, a Telegram user-account listener, a Kotak Neo market-feed connector, exact contract matching, dynamic whole-lot sizing, target exits and persistent state.
 
-**No real orders can be submitted by this release.** It does not contain a broker order adapter. Changing `mode` to `live` raises an error. The feed integrations need authenticated account testing; no AWS resources or GitHub repository were created during packaging.
+**No real orders can be submitted by this release.** It does not contain a broker order adapter. Changing `mode` to `live` raises an error. The feed integrations need authenticated account testing. The project is published to this repository and GitHub Actions validation passes; no AWS resources have been provisioned.
 
 ## Try it locally
 
