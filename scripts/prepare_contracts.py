@@ -16,8 +16,8 @@ a = p.parse_args()
 now = datetime.now(IST)
 with open(a.csv, newline="") as f:
     contracts = list(csv.DictReader(f))
-if not contracts or len(contracts) > 100:
-    raise SystemExit("Supply a shortlist of 1–100 option contracts")
+if not contracts or len(contracts) > 200_000:
+    raise SystemExit("Supply 1–200,000 verified option contracts")
 master = {
     "synthetic": False,
     "as_of": now.date().isoformat(),
@@ -26,6 +26,7 @@ master = {
     "contracts": contracts,
 }
 seen = set()
+identities = set()
 for c in contracts:
     c["order_quantity_per_lot"] = int(c["order_quantity_per_lot"])
     if c["product"] not in (
@@ -47,9 +48,13 @@ for c in contracts:
     if k in seen:
         raise SystemExit("Duplicate token")
     seen.add(k)
+    identity = (c["segment"], c["product"], dec(c["strike"]), c["option_type"], c["expiry"])
+    if identity in identities:
+        raise SystemExit("Ambiguous contract identity")
+    identities.add(identity)
     if stamp(c["expiry_at"]) <= now:
         raise SystemExit("Expired contract")
-    resolve(c, master, now)
+    resolve(c, {**master, "contracts": [c]}, now)
 Path(a.output).write_text(json.dumps(master, indent=2) + "\n")
 print(
     f"Wrote {len(contracts)} contracts. Schema checked; broker economics remain your verification responsibility."

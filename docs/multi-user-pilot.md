@@ -58,7 +58,7 @@ Telethon prompts for the Telegram phone number, login code and any Telegram 2FA 
 
 ## Per-user Kotak paper worker
 
-Prepare the verified daily contract shortlist using the existing `docs/contracts.md` process. The portal does not yet import or verify a broker master in the browser. The master may be shared read-only when identical for both broker accounts, but account entitlements and quote access must be verified individually. Never use the synthetic demo master here.
+Prepare the verified daily full contract catalogue using the portal-account workflow in `docs/contracts.md`. The portal does not yet import or verify a broker master in the browser. The master may be shared read-only when identical for both broker accounts, but account entitlements and quote access must be verified individually. Never use the synthetic demo master here.
 
 With user credentials saved and Telegram authorized:
 
