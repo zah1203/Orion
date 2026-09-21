@@ -5,6 +5,7 @@ from contextlib import contextmanager, suppress
 import fcntl
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
@@ -43,7 +44,8 @@ def telegram_client(creds, session):
         int(creds["telegram_api_id"]),
         creds["telegram_api_hash"],
         timeout=10,
-        request_retries=0,
+        request_retries=2,
+        raise_last_call_error=True,
         connection_retries=1,
         flood_sleep_threshold=0,
         receive_updates=False,
@@ -230,7 +232,8 @@ class Connections:
                 raise ConnectionError("Telegram login code expired. Start again.") from None
             except ConnectionError:
                 raise
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Telegram check failed: %s", type(exc).__name__)
                 self.cancel(uid)
                 raise ConnectionError(
                     "Telegram could not complete this check. Verify your details and connection, then retry."

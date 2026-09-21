@@ -21,7 +21,7 @@ ssm = boto3.client("ssm", region_name="ap-south-1")
 with tempfile.TemporaryDirectory() as tmp:
     archive = Path(tmp) / "release.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
-        for directory in ("orion", "scripts", "config", "tests", "examples"):
+        for directory in ("orion", "scripts", "config", "tests", "examples", "docs"):
             for path in sorted(Path(directory).rglob("*")):
                 if path.is_file() and "__pycache__" not in path.parts:
                     tar.add(path, arcname=str(path), recursive=False)

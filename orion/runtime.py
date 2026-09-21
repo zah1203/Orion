@@ -10,6 +10,7 @@ from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 from .core import Engine, IST, dumps
+from .subscriptions import Subscriptions, active_tokens
 
 
 def credentials():
@@ -57,6 +58,8 @@ async def serve(
     account_lock=None,
 ):
     from telethon import TelegramClient, events
+
+    os.environ["NEO_LOG_FILE_ENABLED"] = "false"
     from neo_api_client import NeoAPI
     from neo_api_client.websocket.feed import WsToken, SFeedScrip, SFeedMarketStatus
 
@@ -147,56 +150,73 @@ async def serve(
     async def feed():
         async with client.create_websocket() as ws:
             await ws.subscribe_exchange()
-            await ws.subscribe_scrips([WsToken(c["segment"], str(c["token"])) for c in master["contracts"]])
-            async for m in ws:
-                if isinstance(m, SFeedMarketStatus):
-                    market_status[m.exchange_segment] = int(m.status_code) in (1, 4)
-                elif isinstance(m, SFeedScrip):
-                    bids = [x.price for x in m.buy if x.quantity > 0 and x.price > 0]
-                    asks = [x.price for x in m.sell if x.quantity > 0 and x.price > 0]
-                    if not bids or not asks or m.auction:
-                        continue
-                    now = datetime.now(timezone.utc)
-                    # Explicit unit setting. An unknown epoch fails freshness, never becomes 'now'.
-                    divisor = 1000 if config["feed_timestamp_unit"] == "milliseconds" else 1
-                    try:
-                        source = datetime.fromtimestamp(m.last_update_time / divisor, timezone.utc)
-                    except (ValueError, OverflowError, OSError):
-                        continue
-                    if abs((now - source).total_seconds()) > config["quote_max_age_seconds"]:
-                        continue
-                    k = m.exchange_segment + ":" + str(m.instrument_token)
-                    # After a gap, invalidate pending crossings before accepting the next tick.
-                    if (
-                        k in last_quote
-                        and (now - last_quote[k]).total_seconds() > config["quote_max_age_seconds"]
-                    ):
-                        with account_lock() if account_lock else nullcontext(), engine.db:
-                            s = engine.state()
-                            for p in s["positions"].values():
-                                if (
-                                    p["status"] == "PENDING"
-                                    and p["contract"]["segment"] + ":" + str(p["contract"]["token"]) == k
-                                ):
-                                    p["status"] = "CANCELLED"
-                            engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
-                    last_quote[k] = now
-                    ingest(
-                        dict(
-                            type="quote",
-                            event_id=str(uuid.uuid4()),
-                            source_time=source.isoformat(),
-                            segment=m.exchange_segment,
-                            token=str(m.instrument_token),
-                            ltp=str(m.last_traded_price),
-                            bid=str(max(bids)),
-                            ask=str(min(asks)),
-                            volume=m.volume_traded_today,
-                            open_interest=m.open_interest,
-                            market_open=market_status.get(m.exchange_segment, False),
-                        )
+            subscriptions = Subscriptions(ws, WsToken)
+
+            async def reconcile():
+                while True:
+                    removed = await subscriptions.sync(engine.state()["positions"])
+                    for segment, token in removed:
+                        last_quote.pop(segment + ":" + token, None)
+                    await asyncio.sleep(0.5)
+
+            async with asyncio.TaskGroup() as tasks:
+                tasks.create_task(reconcile())
+                await consume(ws)
+                raise RuntimeError("Market feed ended; authenticate before restarting")
+
+    async def consume(ws):
+        async for m in ws:
+            if isinstance(m, SFeedMarketStatus):
+                market_status[m.exchange_segment] = int(m.status_code) in (1, 4)
+            elif isinstance(m, SFeedScrip):
+                bids = [x.price for x in m.buy if x.quantity > 0 and x.price > 0]
+                asks = [x.price for x in m.sell if x.quantity > 0 and x.price > 0]
+                if not bids or not asks or m.auction:
+                    continue
+                now = datetime.now(timezone.utc)
+                # Explicit unit setting. An unknown epoch fails freshness, never becomes 'now'.
+                divisor = 1000 if config["feed_timestamp_unit"] == "milliseconds" else 1
+                try:
+                    source = datetime.fromtimestamp(m.last_update_time / divisor, timezone.utc)
+                except (ValueError, OverflowError, OSError):
+                    continue
+                if abs((now - source).total_seconds()) > config["quote_max_age_seconds"]:
+                    continue
+                if (m.exchange_segment, str(m.instrument_token)) not in active_tokens(
+                    engine.state()["positions"]
+                ):
+                    continue
+                k = m.exchange_segment + ":" + str(m.instrument_token)
+                # After a gap, invalidate pending crossings before accepting the next tick.
+                if (
+                    k in last_quote
+                    and (now - last_quote[k]).total_seconds() > config["quote_max_age_seconds"]
+                ):
+                    with account_lock() if account_lock else nullcontext(), engine.db:
+                        s = engine.state()
+                        for p in s["positions"].values():
+                            if (
+                                p["status"] == "PENDING"
+                                and p["contract"]["segment"] + ":" + str(p["contract"]["token"]) == k
+                            ):
+                                p["status"] = "CANCELLED"
+                        engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
+                last_quote[k] = now
+                ingest(
+                    dict(
+                        type="quote",
+                        event_id=str(uuid.uuid4()),
+                        source_time=source.isoformat(),
+                        segment=m.exchange_segment,
+                        token=str(m.instrument_token),
+                        ltp=str(m.last_traded_price),
+                        bid=str(max(bids)),
+                        ask=str(min(asks)),
+                        volume=m.volume_traded_today,
+                        open_interest=m.open_interest,
+                        market_open=market_status.get(m.exchange_segment, False),
                     )
-        raise RuntimeError("Market feed ended; inspect and authenticate before restarting")
+                )
 
     async def telegram_loop():
         await telegram.run_until_disconnected()
