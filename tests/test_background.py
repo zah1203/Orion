@@ -14,7 +14,7 @@ from unittest.mock import patch
 from cryptography.fernet import Fernet
 from orion.portal.app import defaults
 from orion.portal.background import Background
-from orion.portal.broker_session import load, save, validate
+from orion.portal.broker_session import capture, load, save, validate
 from orion.portal.connections import Connections
 from orion.portal.store import Store
 from orion.runtime import serve
@@ -54,6 +54,24 @@ class Sessions(unittest.TestCase):
         self.assertIsNone(load(self.store, self.uid))
         self.store.save_credentials(self.uid, self.creds)
         self.assertIsNone(load(self.store, self.uid))
+
+    def test_https_dynamic_feed_uses_validated_websocket_fallback(self):
+        values = {
+            **self.values,
+            "sfeed_websocket_url": "https://sfeed.kotaksecurities.com/apifeed",
+            "feed_url": "wss://sfeed.kotaksecurities.com/apifeed",
+        }
+        result = capture(SimpleNamespace(configuration=SimpleNamespace(**values)))
+        self.assertNotIn("sfeed_websocket_url", result)
+        self.assertEqual(result["feed_url"], values["feed_url"])
+        for patch in (
+            {"feed_url": "https://sfeed.kotaksecurities.com/apifeed"},
+            {"feed_url": "wss://evil.example/apifeed"},
+            {"feed_url": ""},
+            {"sfeed_websocket_url": "https://user@sfeed.kotaksecurities.com/apifeed"},
+        ):
+            with self.assertRaises(ValueError):
+                capture(SimpleNamespace(configuration=SimpleNamespace(**{**values, **patch})))
 
     def test_reject_credential_exfiltration_and_extra_secret_fields(self):
         for extra in (
