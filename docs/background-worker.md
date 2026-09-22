@@ -84,8 +84,10 @@ performed on EC2; local mocked tests do not prove deployed connectivity.
   account service and finishing open paper trades. Channel filters load at startup.
 * Health separates worker heartbeat, Telegram, broker, catalogue and last quote.
   An online worker is not proof of a fresh market feed.
-* The service runs overnight; this does not enable overnight positions or BTST.
-  Existing channel exit times and BTST review-only behavior are unchanged.
+* The service runs overnight and continues monitoring filled BTST paper positions.
+  A BTST call must enter its stated range before the signal-day channel cutoff;
+  otherwise it expires. Filled positions use their targets, trailed stop, explicit
+  provider close messages, expiry protection and the next-session cutoff.
 
 Journal output is limited to engine events and exception class names. Stored
 messages grow over time; monitor disk usage. No automatic purge is added here.

@@ -215,7 +215,7 @@ def create_app(root, key, origin):
                 cfg["channels"][channel] = {
                     "name": name,
                     "products": selected,
-                    "allow_overnight": False,
+                    "allow_overnight": True,
                     "exit_time_ist": cutoff,
                 }
         try:

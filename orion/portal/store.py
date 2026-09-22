@@ -204,6 +204,11 @@ class Store:
     def config(self, uid):
         user = self.user(uid)
         cfg = user["settings"].copy()
+        # BTST is paper-only and enabled for existing accounts after the feature upgrade.
+        cfg["channels"] = {
+            channel_id: {**channel, "allow_overnight": True}
+            for channel_id, channel in cfg.get("channels", {}).items()
+        }
         cfg["new_entries_enabled"] = user["enabled"]
         cfg["mode"] = "paper"
         return cfg

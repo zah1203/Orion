@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
-from orion.core import Engine, allocations, parse_signal, resolve, stamp
+from orion.core import Engine, allocations, parse_exit, parse_signal, resolve, stamp
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGNAL = "NIFTY 23450 PE\nBUY 170\nTGT 180/200/220\nSL 155"
@@ -177,8 +177,61 @@ class EngineTests(unittest.TestCase):
         )
         self.assertTrue(s["overnight"])
 
-    def test_btst_is_review_only(self):
+    def test_btst_waits_for_range_and_holds_overnight(self):
+        self.cfg["channels"]["-1000000000001"]["allow_overnight"] = True
+        self.msg(text=SIGNAL.replace("BUY 170", "BUY 169-171") + "\nBTST")
+        self.quote(168)
+        self.assertEqual(self.pos()["status"], "PENDING")
+        self.quote(170)
+        self.assertEqual(self.pos()["status"], "OPEN")
+        self.t = stamp("2026-09-18T15:16:00+05:30")
+        self.quote(175)
+        self.assertEqual(self.pos()["status"], "OPEN")
+        self.t = stamp("2026-09-19T10:00:00+05:30")
+        self.quote(220)
+        self.assertEqual(self.pos()["status"], "CLOSED")
+
+    def test_btst_pending_expires_at_signal_day_cutoff(self):
+        self.cfg["channels"]["-1000000000001"]["allow_overnight"] = True
+        self.msg(text=SIGNAL.replace("BUY 170", "BUY 169-171") + "\nBTST")
+        self.t = stamp("2026-09-18T15:15:00+05:30")
+        out = self.quote(168)
+        self.assertEqual(out[0]["event"], "SIGNAL_EXPIRED")
+        self.assertEqual(self.pos()["status"], "CANCELLED")
+
+    def test_btst_requires_channel_permission(self):
+        self.cfg["channels"]["-1000000000001"]["allow_overnight"] = False
         self.assertEqual(self.msg(text=SIGNAL + "\nBTST")[0]["event"], "REVIEW_OR_COMMENTARY")
+
+    def test_provider_exit_cancels_pending_or_closes_open_at_next_quote(self):
+        exit_text = "Stoploss hit for NIFTY 22 SEP 23450 PE. CLOSE THIS POSITION!"
+        self.msg(text=SIGNAL.replace("BUY 170", "BUY 169-171"))
+        out = self.msg(text=exit_text, event_id="exit", message_id="2")
+        self.assertEqual(out[0]["event"], "PENDING_CANCELLED_BY_PROVIDER")
+        self.assertEqual(self.pos()["status"], "CANCELLED")
+
+        self.engine.db.close()
+        self.db = str(Path(self.tmp.name) / "open-state.db")
+        self.engine = Engine(self.db, self.cfg, self.master, True)
+        self.i = 0
+        self.t = stamp(TIME)
+        self.enter()
+        out = self.msg(text=exit_text, event_id="exit-open", message_id="2")
+        self.assertEqual(out[0]["event"], "PROVIDER_EXIT_PENDING_QUOTE")
+        out = self.quote(172)
+        self.assertEqual((out[0]["event"], out[0]["reason"]), ("PAPER_EXIT", "PROVIDER"))
+        self.assertEqual(self.pos()["status"], "CLOSED")
+
+    def test_parse_explicit_provider_exit(self):
+        self.assertEqual(
+            parse_exit("Stoploss hit for SILVERM 24 SEP 240000 PUT. CLOSE THIS POSITION!", TIME),
+            {
+                "product": "SILVERM",
+                "strike": "240000",
+                "option_type": "PE",
+                "expiry": "2026-09-24",
+            },
+        )
 
     def test_nearest_expiry_exact_strike(self):
         s = parse_signal(SIGNAL, TIME)
