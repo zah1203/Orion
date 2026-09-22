@@ -38,16 +38,44 @@ CONTRACT = re.compile(
 )
 
 
+def contract_identity(text, source_time):
+    """Return one explicit option identity without inferring a missing contract."""
+    matches = list(CONTRACT.finditer(text.upper().replace(",", "")))
+    if len(matches) != 1:
+        raise ValueError("Expected one explicit option contract")
+    product, day, month, year, strike, kind = matches[0].groups()
+    expiry = None
+    if day:
+        month_num = {v.upper(): i for i, v in enumerate(calendar.month_abbr) if v}.get(month)
+        if not month_num:
+            raise ValueError("Invalid expiry month")
+        expiry = (
+            datetime(int(year or stamp(source_time).astimezone(IST).year), month_num, int(day))
+            .date()
+            .isoformat()
+        )
+    return {
+        "product": product,
+        "strike": str(dec(strike)),
+        "option_type": {"CALL": "CE", "PUT": "PE"}.get(kind, kind),
+        "expiry": expiry,
+    }
+
+
+def parse_exit(text, source_time):
+    """Recognize explicit provider exits while requiring the full option identity."""
+    t = text.upper().replace(",", "")
+    if not re.search(r"\b(?:CLOSE THIS POSITION|STOP\s*LOSS HIT|STOPLOSS HIT|SL HIT|EXIT NOW)\b", t):
+        raise ValueError("Not an explicit exit")
+    return contract_identity(t, source_time)
+
+
 def parse_signal(text, source_time):
     """Only complete BUY signals; no implicit link to an earlier contract."""
     t = text.upper().replace(",", "")
     if re.search(r"\bWATCHLIST\b", t):
         raise ValueError("Watchlist, not a signal")
-    matches = list(CONTRACT.finditer(t))
-    if len(matches) != 1:
-        raise ValueError("Expected one explicit option contract")
-    m = matches[0]
-    product, day, month, year, strike, kind = m.groups()
+    identity = contract_identity(t, source_time)
     if re.search(r"\bACTION\s*:\s*SELL\b|\bSELL\s+\d", t):
         raise ValueError("Option selling not supported")
     entry = re.search(r"ENTRY PRICE RANGE\s*:\s*" + NUM + r"\s*[-–]\s*" + NUM, t)
@@ -79,22 +107,8 @@ def parse_signal(text, source_time):
     sl = dec(stop.group(1))
     if not (0 < sl < low <= high < targets[0] < targets[1] < targets[2]):
         raise ValueError("Invalid price ordering")
-    expiry = None
-    if day:
-        month_num = {v.upper(): i for i, v in enumerate(calendar.month_abbr) if v}.get(month)
-        if not month_num:
-            raise ValueError("Invalid expiry month")
-        # Missing year means source-year, never silently roll an old call into next year.
-        expiry = (
-            datetime(int(year or stamp(source_time).astimezone(IST).year), month_num, int(day))
-            .date()
-            .isoformat()
-        )
     return dict(
-        product=product,
-        strike=str(dec(strike)),
-        option_type={"CALL": "CE", "PUT": "PE"}.get(kind, kind),
-        expiry=expiry,
+        **identity,
         entry_low=str(low),
         entry_high=str(high),
         entry_mode=mode,
@@ -232,6 +246,33 @@ class Engine:
             return emit("EDIT_REQUIRES_REVIEW", signal_id=key)
         if key in s["positions"]:
             return emit("DUPLICATE_MESSAGE", signal_id=key)
+        try:
+            closing = parse_exit(e["text"], e["source_time"])
+        except ValueError:
+            closing = None
+        if closing:
+            matches = []
+            for signal_id, position in s["positions"].items():
+                if signal_id.split(":")[0] != str(e["channel_id"]):
+                    continue
+                if position["status"] not in ("PENDING", "OPEN"):
+                    continue
+                if any(
+                    position.get(field) != closing[field]
+                    for field in ("product", "strike", "option_type")
+                ):
+                    continue
+                if closing["expiry"] and position["contract"]["expiry"] != closing["expiry"]:
+                    continue
+                matches.append((signal_id, position))
+            if len(matches) != 1:
+                return emit("EXIT_REQUIRES_REVIEW", signal_id=key, matches=len(matches))
+            signal_id, position = matches[0]
+            if position["status"] == "PENDING":
+                position["status"] = "CANCELLED"
+                return emit("PENDING_CANCELLED_BY_PROVIDER", signal_id=signal_id)
+            position["exit_requested"] = True
+            return emit("PROVIDER_EXIT_PENDING_QUOTE", signal_id=signal_id)
         if not self.cfg.get("new_entries_enabled", True):
             return emit("ENTRIES_PAUSED", signal_id=key)
         age = (now - stamp(e["source_time"])).total_seconds()
@@ -241,8 +282,8 @@ class Engine:
             signal = parse_signal(e["text"], e["source_time"])
             if signal["product"] not in channel["products"]:
                 raise ValueError("Product not allowed for this channel")
-            if signal["overnight"]:
-                raise ValueError("BTST recorded for review; overnight execution is not implemented")
+            if signal["overnight"] and not channel.get("allow_overnight", False):
+                raise ValueError("BTST is disabled for this channel")
             c = resolve(signal, self.master, now, self.allow_synthetic)
         except (ValueError, KeyError) as exc:
             return emit("REVIEW_OR_COMMENTARY", signal_id=key, reason=str(exc))
@@ -261,6 +302,9 @@ class Engine:
             remaining=0,
             stage=0,
             entry_fill=None,
+            entry_time=None,
+            entry_date_ist=None,
+            exit_requested=False,
             allocations=[],
             pnl="0",
         )
@@ -302,11 +346,14 @@ class Engine:
                     p["status"] = "CANCELLED"
                     emit("ENTRIES_PAUSED", signal_id=key)
                     continue
-                if (
-                    expiry_cutoff
-                    or cutoff
-                    or (now - stamp(p["source_time"])).total_seconds() > self.cfg["signal_max_age_seconds"]
-                ):
+                signal_date = stamp(p["source_time"]).astimezone(IST).date().isoformat()
+                pending_expired = (
+                    (today != signal_date or cutoff)
+                    if p.get("overnight")
+                    else (now - stamp(p["source_time"])).total_seconds()
+                    > self.cfg["signal_max_age_seconds"]
+                )
+                if expiry_cutoff or pending_expired:
                     p["status"] = "CANCELLED"
                     emit("SIGNAL_EXPIRED", signal_id=key)
                     continue
@@ -374,6 +421,8 @@ class Engine:
                     lots=lots,
                     remaining=lots,
                     entry_fill=str(ask),
+                    entry_time=qtime.isoformat(),
+                    entry_date_ist=qtime.astimezone(IST).date().isoformat(),
                     allocations=allocations(lots),
                     pnl=str(-fee),
                 )
@@ -385,12 +434,20 @@ class Engine:
             if not e.get("market_open", False):
                 emit("MARKET_CLOSED_POSITION", signal_id=key)
                 continue
-            if expiry_cutoff or cutoff or bid <= dec(p["stop"]):
+            overnight_cutoff = p.get("overnight") and today > p.get("entry_date_ist", today) and cutoff
+            regular_cutoff = not p.get("overnight") and cutoff
+            if p.get("exit_requested") or expiry_cutoff or overnight_cutoff or regular_cutoff or bid <= dec(p["stop"]):
                 self._sell(s, p, p["remaining"], bid, day)
                 emit(
                     "PAPER_EXIT",
                     signal_id=key,
-                    reason="CUTOFF" if expiry_cutoff or cutoff else "STOP",
+                    reason=(
+                        "PROVIDER"
+                        if p.get("exit_requested")
+                        else "CUTOFF"
+                        if expiry_cutoff or overnight_cutoff or regular_cutoff
+                        else "STOP"
+                    ),
                     price=str(bid),
                     pnl=p["pnl"],
                 )

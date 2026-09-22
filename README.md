@@ -61,9 +61,9 @@ The master supplies product-specific premium multipliers; none are inferred from
 
 Index paper cutoff defaults to 15:15 IST and commodity cutoff to 22:45 IST. Both require fresh open-market quotes to simulate exits. There is no guaranteed exit if the feed is unavailable. Session calendar, special sessions and broker expiry procedures must be verified before real execution.
 
-## Deliberately review-only in this version
+## Paper execution boundaries
 
-- BTST signals, including the gold/silver screenshot examples. Overnight holding and commodity expiry/devolvement management are not implemented. `allow_overnight` is reserved and cannot enable them.
+- BTST calls are paper-only: a fresh complete call remains pending until its stated entry range is reached on the signal day, then can be held overnight. Targets, the trailed stop, expiry protection, the next-session cutoff and an explicit provider close manage the simulated exit. A BTST call that does not enter by the signal-day cutoff expires; it is never filled the next morning.
 - Incomplete/split calls, ambiguous reentries, underlying-index levels, bare price updates, “Active”, and discretionary “strong momentum” or “no movement” messages.
 - Edited calls: pending signals are cancelled, open position rules are not silently changed.
 - Missing contracts, unknown instruments and signals outside the verified shortlist.

@@ -5,7 +5,7 @@
 - 25 deterministic unit tests passed under Python 3.12.14.
 - Replay of the provided NIFTY-style entry/three-target sequence produced one 3-lot simulated entry, then one lot per target; stops moved to actual entry and then T1. No duplicate fills on replay into the same database.
 - One-lot trailing without fractional exits, gap-through-target exits, gap-through-stop pricing, SQLite restart persistence, repeated messages/reposts, edited pending calls, stale messages/quotes, pre-signal quotes, closed-market entry blocking, insufficient risk budget, range entries and late crossings tested.
-- Exact strike/type matching, nearest verified expiry, explicit expiry without fallback, duplicate instruments, stale/synthetic masters, commodity expiry parsing and BTST review-only behavior tested.
+- Exact strike/type matching, nearest verified expiry, explicit expiry without fallback, duplicate instruments, stale/synthetic masters, commodity expiry parsing and the BTST paper lifecycle are tested.
 - Python wheel built and installed; pinned runtime dependencies installed and `pip check` passed.
 - Python syntax and targeted Ruff correctness checks passed.
 - Four GitHub workflow YAML files parsed; Terraform HCL parsed; cloud-init shell syntax passed.
@@ -28,4 +28,4 @@ No AWS plan/apply, SSM installation, actual Telegram login/channel access, Kotak
 
 Paper results assume complete fills at observed bid/ask; the example's ₹785 simulated gain uses fictitious contract economics and a flat illustrative fee. It is a software demonstration, not a strategy performance result.
 
-The application has no real-order execution path and no overnight-trading implementation. MCX BTST calls remain recorded for review. Crude parsing needs representative provider examples. Account setup and these limitations are described in README.md and docs/setup.md.
+The application has no real-order execution path. BTST support is limited to paper simulation: entry must occur in the stated range before the signal-day cutoff, and filled positions remain subject to targets, the trailed stop, explicit provider closes, expiry protection and the next-session cutoff. Crude parsing needs representative provider examples. Account setup and these limitations are described in README.md and docs/setup.md.

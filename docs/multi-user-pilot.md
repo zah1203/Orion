@@ -8,7 +8,9 @@ This adds a private dashboard to the existing Orion repository. Each user has a 
 - Kotak only and two existing complete-message parser profiles. A different provider format still needs parser work.
 - Browser users can save credentials, complete Telegram login, select channels, validate Kotak with TOTP, and enable/pause entries. Starting the daily paper worker still requires the operator.
 - One separately authenticated paper worker process per user. Enabling entries in the dashboard does not launch a worker.
-- BTST/overnight calls remain review-only. Selecting a commodity does not activate overnight trading.
+- BTST calls are paper-only. They wait for the stated entry range on the signal day,
+  may remain open overnight after a fill, and exit through targets, the trailed stop,
+  an explicit provider close, expiry protection or the next-session cutoff.
 - User data is logically isolated by application authentication and per-account files. This is a trusted single-host pilot, not OS/container isolation between mutually untrusted customers.
 - Keep the dashboard private through a local connection or SSM port-forwarding. Internet-facing deployment, managed identity/MFA, operational alerting, backups, scalable database/queues and public-service review are later work.
 

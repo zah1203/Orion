@@ -17,7 +17,7 @@
   "expiry_exit_buffer_seconds": 1800,
   "feed_timestamp_unit": "seconds",
   "channels": {
-    "-1000000000001": {"name": "index-options", "products": ["NIFTY", "BANKNIFTY"], "allow_overnight": false, "exit_time_ist": "15:15"},
-    "-1000000000002": {"name": "commodity-options", "products": ["GOLDM", "SILVERM", "CRUDEOIL", "CRUDEOILM"], "allow_overnight": false, "exit_time_ist": "22:45"}
+    "-1000000000001": {"name": "index-options", "products": ["NIFTY", "BANKNIFTY"], "allow_overnight": true, "exit_time_ist": "15:15"},
+    "-1000000000002": {"name": "commodity-options", "products": ["GOLDM", "SILVERM", "CRUDEOIL", "CRUDEOILM"], "allow_overnight": true, "exit_time_ist": "22:45"}
   }
 }
