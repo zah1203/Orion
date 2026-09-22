@@ -37,9 +37,19 @@ def validate(values):
 
 
 def capture(client):
-    return validate(
-        {k: getattr(client.configuration, k) for k in FIELDS if getattr(client.configuration, k, None)}
-    )
+    values = {k: getattr(client.configuration, k) for k in FIELDS if getattr(client.configuration, k, None)}
+    preferred = urlparse(values.get("sfeed_websocket_url", ""))
+    # Some Kotak dynamic configurations supply HTTPS here. Use the broker's
+    # explicit websocket fallback; do not guess a websocket path or allow HTTPS.
+    if (
+        preferred.scheme == "https"
+        and preferred.hostname == "sfeed.kotaksecurities.com"
+        and preferred.username is None
+        and preferred.password is None
+        and values.get("feed_url")
+    ):
+        values.pop("sfeed_websocket_url")
+    return validate(values)
 
 
 def save(store, uid, creds, values):
