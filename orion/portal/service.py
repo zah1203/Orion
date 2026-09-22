@@ -39,6 +39,7 @@ class Accounts:
                 **user,
                 "credentials": self.store.credential_status(uid),
                 "worker_online": self.store.worker_alive(uid),
+                "worker_health": self.store.health(uid),
                 "state": state,
                 "history": history,
                 "pnl": report(state, user["settings"]["quote_max_age_seconds"]),

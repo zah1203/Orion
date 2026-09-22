@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import getpass
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import uuid
@@ -56,15 +57,19 @@ async def serve(
     totp_code=None,
     config_provider=None,
     account_lock=None,
+    background=None,
 ):
     from telethon import TelegramClient, events
 
     os.environ["NEO_LOG_FILE_ENABLED"] = "false"
+    logging.disable(logging.CRITICAL)
     from neo_api_client import NeoAPI
     from neo_api_client.websocket.feed import WsToken, SFeedScrip, SFeedMarketStatus
 
     os.umask(0o077)
-    if master.get("synthetic") or master["as_of"] != datetime.now(IST).date().isoformat():
+    if not background and (
+        master.get("synthetic") or master["as_of"] != datetime.now(IST).date().isoformat()
+    ):
         raise ValueError("Current, verified instrument master required")
     if not config.get("live_inputs_enabled", False):
         raise ValueError("Set live_inputs_enabled only after configuring channel IDs and contracts")
@@ -80,13 +85,15 @@ async def serve(
                 p["status"] = "CANCELLED"
         engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
     creds = credentials_override if credentials_override is not None else credentials()
-    client = NeoAPI(consumer_key=creds["kotak_consumer_key"], environment="prod")
-    client.totp_login(
-        mobile_number=creds["kotak_mobile"],
-        ucc=creds["kotak_ucc"],
-        totp=totp_code if totp_code is not None else read_totp(),
-    )
-    client.totp_validate(mpin=creds["kotak_mpin"])
+    client = None
+    if not background:
+        client = NeoAPI(consumer_key=creds["kotak_consumer_key"], environment="prod")
+        client.totp_login(
+            mobile_number=creds["kotak_mobile"],
+            ucc=creds["kotak_ucc"],
+            totp=totp_code if totp_code is not None else read_totp(),
+        )
+        client.totp_validate(mpin=creds["kotak_mpin"])
     telegram = TelegramClient(session_path, int(creds["telegram_api_id"]), creds["telegram_api_hash"])
     await telegram.connect()
     if not await telegram.is_user_authorized():
@@ -95,10 +102,35 @@ async def serve(
     last_quote = {}
     market_status = {}
 
+    def cancel_pending(*, reset_feed=False):
+        with account_lock() if account_lock else nullcontext(), engine.db:
+            state = engine.state()
+            for position in state["positions"].values():
+                if position["status"] == "PENDING":
+                    position["status"] = "CANCELLED"
+            if reset_feed:
+                state["last_quotes"] = {}
+            engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(state),))
+        if reset_feed:
+            last_quote.clear()
+            market_status.clear()
+
+    def refresh_config():
+        if config_provider:
+            engine.cfg = config_provider()
+        if background:
+            engine.master, current = background.catalogue()
+            connected = telegram.is_connected()
+            background.state["telegram"] = "connected" if connected else "disconnected"
+            authorized = background.session() is not None
+            if not current or not connected or not authorized or background.state["broker"] != "connected":
+                engine.cfg = {**engine.cfg, "new_entries_enabled": False}
+            if not current or not connected or not authorized:
+                cancel_pending()
+
     def ingest(event):
+        refresh_config()
         with account_lock() if account_lock else nullcontext():
-            if config_provider:
-                engine.cfg = config_provider()
             now = datetime.now(timezone.utc)
             with engine.db:
                 engine.db.execute(
@@ -111,6 +143,10 @@ async def serve(
     async def message(event):
         if event.message.date < boot and not event.message.edit_date:
             return  # never replay old Telegram backlog as new entries
+        if background:
+            background.status(
+                last_message_at=datetime.now(timezone.utc).isoformat(), last_channel=str(event.chat_id)
+            )
         text = event.raw_text or ""
         edited = event.message.edit_date is not None
         digest = hashlib.sha256(text.encode()).hexdigest()
@@ -134,8 +170,9 @@ async def serve(
     async def watchdog():
         while True:
             await asyncio.sleep(15)
-            if config_provider:
-                engine.cfg = config_provider()
+            refresh_config()
+            if background:
+                background.status()
             now = datetime.now(timezone.utc)
             for p in engine.state()["positions"].values():
                 if p["status"] not in ("OPEN", "PENDING"):
@@ -147,10 +184,13 @@ async def serve(
                 ):
                     print(dumps({"event": "FEED_STALE", "contract": p["contract"]["symbol"]}), flush=True)
 
-    async def feed():
-        async with client.create_websocket() as ws:
+    async def feed(broker):
+        options = {"max_reconnect_attempts": 0, "max_connect_retries": 1} if background else {}
+        async with broker.create_websocket(**options) as ws:
             await ws.subscribe_exchange()
             subscriptions = Subscriptions(ws, WsToken)
+            if background:
+                background.status(broker="connected")
 
             async def reconcile():
                 while True:
@@ -163,6 +203,50 @@ async def serve(
                 tasks.create_task(reconcile())
                 await consume(ws)
                 raise RuntimeError("Market feed ended; authenticate before restarting")
+
+    async def broker_loop():
+        if not background:
+            return await feed(client)
+        failed_version, failures = None, 0
+        while True:
+            session = background.session()
+            if not session:
+                background.status(broker="authentication_required")
+                await asyncio.sleep(5)
+                continue
+            version = session["version"]
+            if failed_version != version:
+                failures = 0
+                failed_version = version
+            if failures >= 3:
+                background.status(broker="reauthentication_required")
+                await asyncio.sleep(5)
+                continue
+            task = None
+            try:
+                broker = NeoAPI(consumer_key=creds["kotak_consumer_key"], environment="prod")
+                for key, value in session["values"].items():
+                    setattr(broker.configuration, key, value)
+                background.status(broker="connecting")
+                task = asyncio.create_task(feed(broker))
+                while not task.done():
+                    await asyncio.sleep(2)
+                    current = background.session()
+                    if not current or current["version"] != version:
+                        break
+                if task.done():
+                    await task
+            except Exception as exc:
+                # SDK exception messages may contain secrets; never log them.
+                print(dumps({"event": "BROKER_FEED_RETRY", "error_type": type(exc).__name__}), flush=True)
+                failures += 1
+            finally:
+                if task is not None:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                cancel_pending(reset_feed=True)
+                background.status(broker="disconnected")
+            await asyncio.sleep(30)
 
     async def consume(ws):
         async for m in ws:
@@ -202,6 +286,8 @@ async def serve(
                                 p["status"] = "CANCELLED"
                         engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
                 last_quote[k] = now
+                if background:
+                    background.state["last_quote_at"] = now.isoformat()
                 ingest(
                     dict(
                         type="quote",
@@ -226,8 +312,10 @@ async def serve(
         async with asyncio.TaskGroup() as group:
             group.create_task(telegram_loop())
             group.create_task(watchdog())
-            group.create_task(feed())
+            group.create_task(broker_loop())
     finally:
         await telegram.disconnect()
-        client.logout()
+        # Do not invalidate a reusable broker session on worker shutdown.
+        if client is not None:
+            client.logout()
         engine.db.close()

@@ -22,6 +22,7 @@ def success(response):
 def main():
     payload = json.load(sys.stdin)
     ok = False
+    session = None
     os.environ["NEO_LOG_FILE_ENABLED"] = "false"
     logging.disable(logging.CRITICAL)
     with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
@@ -35,11 +36,15 @@ def main():
             )
             if success(first):
                 ok = success(client.totp_validate(mpin=creds["kotak_mpin"]))
-            # Probe tokens are not persisted or returned. Do not log out other sessions.
+            if ok:
+                from .broker_session import capture
+
+                session = capture(client)
+            # Session travels only over the private parent/child pipe, never logs.
         except Exception:
             pass
-    print("OK" if ok else "FAILED")
-    return 0 if ok else 1
+    print(json.dumps(session) if ok and session else "FAILED")
+    return 0 if ok and session else 1
 
 
 if __name__ == "__main__":

@@ -1,0 +1,33 @@
+[Unit]
+Description=Orion paper channel worker for %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+ConditionPathExists=/etc/orion/portal.env
+ConditionPathExists=/etc/orion/portal.key
+
+[Service]
+Type=simple
+User=orion
+Group=orion
+WorkingDirectory=/opt/orion/current
+EnvironmentFile=/etc/orion/portal.env
+Environment=NEO_LOG_FILE_ENABLED=false
+ExecStart=/opt/orion/current/.venv/bin/python -m orion.portal worker --background --username %i --master /var/lib/orion/portal/contracts.json
+Restart=always
+RestartSec=30
+KillSignal=SIGINT
+TimeoutStopSec=25
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orion/portal
+
+[Install]
+WantedBy=multi-user.target

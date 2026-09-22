@@ -39,6 +39,9 @@ subprocess.run([python, "-m", "pip", "install", "-r", str(release / "requirement
 subprocess.run([python, "-m", "pip", "install", "--no-deps", str(release)], check=True)
 subprocess.run([python, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=release, check=True)
 # Only stop the old paper process after the new environment passes tests.
+# Stop all account services before switching source/venv. Leave them stopped
+# for explicit operator restart after catalogue/authentication review.
+subprocess.run(["systemctl", "stop", "orion-worker@*.service"], check=False)
 subprocess.run(["systemctl", "stop", "orion.service"], check=False)
 subprocess.run(["systemctl", "stop", "orion-portal.service"], check=False)
 subprocess.run(
@@ -56,6 +59,16 @@ subprocess.run(
         "644",
         str(release / "scripts/orion-portal.service"),
         "/etc/systemd/system/orion-portal.service",
+    ],
+    check=True,
+)
+subprocess.run(
+    [
+        "install",
+        "-m",
+        "644",
+        str(release / "scripts/orion-worker@.service"),
+        "/etc/systemd/system/orion-worker@.service",
     ],
     check=True,
 )

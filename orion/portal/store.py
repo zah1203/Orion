@@ -36,6 +36,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(bucket TEXT NOT NULL,at REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS attempts_bucket ON attempts(bucket,at);
+            CREATE TABLE IF NOT EXISTS broker_sessions(user_id TEXT PRIMARY KEY REFERENCES users(id),ciphertext BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS worker_health(user_id TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS worker_status(user_id TEXT PRIMARY KEY,at REAL NOT NULL);
             """)
         # Fail startup on the wrong key instead of silently losing access to saved credentials.
@@ -167,10 +169,11 @@ class Store:
 
     def save_credentials(self, uid, patch):
         values = self.credentials(uid)
-        if any(
+        broker_changed = any(
             k.startswith("kotak_") and k != "kotak_checked_at" and v != values.get(k)
             for k, v in patch.items()
-        ):
+        )
+        if broker_changed:
             values.pop("kotak_checked_at", None)
         # API ID/hash replacement invalidates any existing Telegram authorization.
         if any(k in patch and patch[k] != values.get(k) for k in ("telegram_api_id", "telegram_api_hash")):
@@ -183,6 +186,8 @@ class Store:
                 values[k] = v
         encrypted = self.cipher.encrypt(json.dumps({"user_id": uid, "values": values}).encode())
         with self.db() as db:
+            if broker_changed:
+                db.execute("DELETE FROM broker_sessions WHERE user_id=?", (uid,))
             db.execute(
                 "INSERT INTO secrets VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET ciphertext=excluded.ciphertext",
                 (uid, encrypted),
@@ -231,3 +236,13 @@ class Store:
     def set_enabled(self, uid, enabled):
         with self.db() as db:
             db.execute("UPDATE users SET enabled=? WHERE id=?", (int(enabled), uid))
+
+    def health(self, uid, values=None):
+        with self.db() as db:
+            if values is not None:
+                db.execute(
+                    "INSERT INTO worker_health VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET body=excluded.body",
+                    (uid, json.dumps(values)),
+                )
+            row = db.execute("SELECT body FROM worker_health WHERE user_id=?", (uid,)).fetchone()
+        return json.loads(row[0]) if row else {}
