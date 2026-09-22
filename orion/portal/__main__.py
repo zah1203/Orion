@@ -28,6 +28,11 @@ def main():
     q = sub.add_parser("worker")
     q.add_argument("--username", required=True)
     q.add_argument("--master", required=True)
+    q.add_argument(
+        "--background",
+        action="store_true",
+        help="Reuse encrypted broker session; never prompt; keep listening without broker",
+    )
     a = p.parse_args()
     if a.command == "init-key":
         with open(a.file, "xb") as f:
@@ -103,10 +108,18 @@ def main():
         if not config["channels"]:
             raise SystemExit("Configure channels first")
         config["live_inputs_enabled"] = True
-        master = json.loads(Path(a.master).read_text())
-        code = getpass.getpass("Current Kotak TOTP for this user: ")
-        if len(code) != 6 or not code.isdigit():
-            raise SystemExit("Expected six digits")
+        background = None
+        code = None
+        if a.background:
+            from .background import Background
+
+            background = Background(store, uid, a.master)
+            master, _ = background.catalogue()
+        else:
+            master = json.loads(Path(a.master).read_text())
+            code = getpass.getpass("Current Kotak TOTP for this user: ")
+            if len(code) != 6 or not code.isdigit():
+                raise SystemExit("Expected six digits")
 
         def current_config():
             store.heartbeat(uid)
@@ -125,8 +138,13 @@ def main():
                     totp_code=code,
                     config_provider=current_config,
                     account_lock=lambda: store.lock(uid),
+                    background=background,
                 )
             )
+        except Exception as exc:
+            if a.background:
+                raise SystemExit("Background worker stopped: " + type(exc).__name__) from None
+            raise
         finally:
             with store.db() as db:
                 db.execute("DELETE FROM worker_status WHERE user_id=?", (uid,))

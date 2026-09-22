@@ -21,11 +21,16 @@ class ConnectionError(ValueError):
 
 
 @contextmanager
-def connection_lease(store, uid):
+def connection_lease(store, uid, allow_worker=False):
     # Same lease as the CLI worker/login. Never wait on a running worker.
-    with open(store.account_dir(uid) / "worker.lock", "a") as lease:
+    with (
+        open(store.account_dir(uid) / "broker-auth.lock", "a") as auth_lease,
+        open(store.account_dir(uid) / "worker.lock", "a") as lease,
+    ):
         try:
-            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(auth_lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not allow_worker:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ConnectionError(
                 "Stop the account worker or wait for the current connection check.", 409
@@ -73,10 +78,13 @@ async def kotak_check(creds, totp):
         output, _ = await asyncio.wait_for(
             process.communicate(json.dumps({"creds": creds, "totp": totp}).encode()), 40
         )
-        if process.returncode != 0 or output.strip() != b"OK":
+        if process.returncode != 0:
             raise ConnectionError(
                 "Kotak authentication failed. Check the saved token, mobile, UCC, MPIN, server IP whitelist and fresh TOTP."
             )
+        from .broker_session import validate
+
+        return validate(json.loads(output))
     finally:
         if process.returncode is None:
             process.kill()
@@ -243,7 +251,7 @@ class Connections:
                     await asyncio.wait_for(client.disconnect(), 5)
 
     async def kotak(self, uid, totp):
-        with connection_lease(self.store, uid):
+        with connection_lease(self.store, uid, allow_worker=True):
             self.limit(uid, "kotak", 5)
             creds = self.store.credentials(uid)
             required = ("kotak_consumer_key", "kotak_mobile", "kotak_ucc", "kotak_mpin")
@@ -251,7 +259,11 @@ class Connections:
                 raise ConnectionError("Save the Kotak token, registered mobile, UCC and MPIN first.")
             self.store.save_credentials(uid, {"kotak_checked_at": None})
             try:
-                await self.broker_check({k: creds[k] for k in required}, totp)
+                session = await self.broker_check({k: creds[k] for k in required}, totp)
+                if session is not None:
+                    from .broker_session import save
+
+                    save(self.store, uid, creds, session)
             except ConnectionError:
                 raise
             except Exception:
@@ -261,5 +273,5 @@ class Connections:
             self.store.save_credentials(uid, {"kotak_checked_at": time.time()})
             return {
                 "ok": True,
-                "message": "Kotak authentication verified now. No order placed; market data and worker are not started.",
+                "message": "Kotak authentication verified. Feed session saved encrypted for the background worker; no order placed. Reuse is limited to this IST day and broker acceptance.",
             }

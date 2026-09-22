@@ -15,6 +15,10 @@ for(const product of instruments){const label=document.createElement('label'),in
 function fillSettings(settings){const form=$('#settings-form');for(const key of numericFields)form.elements[key].value=settings[key];form.elements.index_channel.value='';form.elements.commodity_channel.value='';const products=new Set();for(const [id,c] of Object.entries(settings.channels)){form.elements[c.name==='index-options'?'index_channel':'commodity_channel'].value=id;c.products.forEach(p=>products.add(p));}document.querySelectorAll('[name=product]').forEach(i=>i.checked=products.has(i.value));}
 async function refresh(fill=false){
  const data=await api('/api/me');current=data;csrf=data.csrf;$('#login-view').hidden=true;$('#dashboard').hidden=false;$('#logout').hidden=false;
+ const health=data.worker_health||{};
+ $('#worker-health').textContent=data.worker_online
+ ? `Telegram: ${health.telegram||'legacy worker'} · Kotak: ${health.broker||'unknown'} · Catalogue: ${health.catalogue||'unknown'} · Last message: ${health.last_message_at||'none this run'} · Last quote: ${health.last_quote_at||'none this run'}`
+ : 'Worker offline — no active monitoring confirmed.';
  $('#greeting').textContent=`WELCOME, ${data.username}`;$('#cash').textContent=money(data.state.cash);$('#entry-state').textContent=data.enabled?'Enabled':'Paused';$('#worker-state').textContent=data.worker_online?'Online · paper':'Offline';
  $('#enable').disabled=data.enabled;$('#pause').disabled=!data.enabled;
  await refreshConnections();
