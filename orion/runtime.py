@@ -102,8 +102,8 @@ async def serve(
     last_quote = {}
     market_status = {}
 
-    def cancel_pending(*, reset_feed=False):
-        with account_lock() if account_lock else nullcontext(), engine.db:
+    def cancel_pending(*, reset_feed=False, locked=False):
+        with account_lock() if account_lock and not locked else nullcontext(), engine.db:
             state = engine.state()
             for position in state["positions"].values():
                 if position["status"] == "PENDING":
@@ -115,7 +115,7 @@ async def serve(
             last_quote.clear()
             market_status.clear()
 
-    def refresh_config():
+    def refresh_config(*, locked=False):
         if config_provider:
             engine.cfg = config_provider()
         if background:
@@ -126,11 +126,15 @@ async def serve(
             if not current or not connected or not authorized or background.state["broker"] != "connected":
                 engine.cfg = {**engine.cfg, "new_entries_enabled": False}
             if not current or not connected or not authorized:
-                cancel_pending()
+                cancel_pending(locked=locked)
 
     def ingest(event):
-        refresh_config()
         with account_lock() if account_lock else nullcontext():
+            # Read entry permission/settings under the same lock as processing:
+            # a dashboard pause/save must not race an event using old limits.
+            refresh_config(locked=True)
+            if event["type"] == "message" and str(event["channel_id"]) not in engine.cfg["channels"]:
+                return
             now = datetime.now(timezone.utc)
             with engine.db:
                 engine.db.execute(
@@ -163,9 +167,14 @@ async def serve(
             )
         )
 
-    channels = [int(x) for x in config["channels"]]
-    telegram.add_event_handler(message, events.NewMessage(chats=channels))
-    telegram.add_event_handler(message, events.MessageEdited(chats=channels))
+    def selected_channel(event):
+        cfg = config_provider() if config_provider else engine.cfg
+        return str(event.chat_id) in cfg["channels"]
+
+    # Resolve the account's current allowlist for every event, before reading or
+    # storing message text. Channel edits therefore require no process restart.
+    telegram.add_event_handler(message, events.NewMessage(func=selected_channel))
+    telegram.add_event_handler(message, events.MessageEdited(func=selected_channel))
 
     async def watchdog():
         while True:

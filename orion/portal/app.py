@@ -54,6 +54,11 @@ class Control(Strict):
     enabled: bool = Field(strict=True)
 
 
+class Balance(Strict):
+    amount: float = Field(ge=0, le=100000000, allow_inf_nan=False)
+    reason: str = Field(min_length=1, max_length=200)
+
+
 class Credentials(Strict):
     kotak_consumer_key: str | None = Field(default=None, max_length=4096)
     kotak_mobile: str | None = Field(default=None, max_length=30)
@@ -196,8 +201,8 @@ def create_app(root, key, origin):
         uid = identity(request, True)["user_id"]
         if body.index_channel and body.index_channel == body.commodity_channel:
             raise HTTPException(422, "Use different channels for the two provider profiles")
-        if body.risk_per_trade > body.max_open_risk or body.risk_per_trade > body.paper_cash:
-            raise HTTPException(422, "Per-trade risk must fit the open-risk budget and starting capital")
+        if body.risk_per_trade > body.max_open_risk:
+            raise HTTPException(422, "Per-trade risk must fit the total open-risk budget")
         cfg = store.user(uid)["settings"]
         cfg["channels"] = {}
         for field in ("paper_cash", "risk_per_trade", "daily_loss_limit", "max_open_risk"):
@@ -220,6 +225,15 @@ def create_app(root, key, origin):
                 }
         try:
             accounts.save_settings(uid, cfg)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"ok": True}
+
+    @app.post("/api/paper-balance")
+    def paper_balance(body: Balance, request: Request):
+        uid = identity(request, True)["user_id"]
+        try:
+            accounts.adjust_balance(uid, body.amount, body.reason)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from None
         return {"ok": True}

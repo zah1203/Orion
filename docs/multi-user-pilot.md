@@ -41,7 +41,7 @@ Do not commit key files or runtime data. Encryption keys must be backed up priva
 ## What to try
 
 1. Sign in as Alice and Bob in separate browser profiles.
-2. Set Alice to a maximum of 3 lots and Bob to 1. Give each account its permitted channel IDs and instruments. Settings can be changed only with entries paused, no worker process and no open/pending paper trades.
+2. Set Alice to a maximum of 3 lots and Bob to 1. Give each account its permitted channel IDs and instruments. Use **Pause and edit settings**, then save while the worker stays online. Changes require paused entries and no open/pending paper trades.
 3. Run **Try your risk settings** for each user. This disposable synthetic NIFTY example uses that user's sizing limits; it does not submit orders or alter the real paper ledger, channels or entry-enabled flag.
 4. Observe Alice's partial exits and Bob's one-lot stop movements. The example uses fictional multipliers and a synthetic price sequence; this is a software demonstration, not strategy performance.
 5. Save API details if you intend to connect real inputs. The UI returns only saved-field names, never credential values. Saving credentials is separate from account authentication.
@@ -76,7 +76,7 @@ The dashboard's worker indicator means a worker heartbeat was seen within 45 sec
 
 **Pause entries** immediately cancels pending signals and blocks new ones. The running worker continues managing existing simulated positions through the same stop/target rules. Pausing is not an emergency liquidation command. Do not stop a worker with open positions unless you are deliberately interrupting simulated management. Without fresh quotes no stop/target exit can be simulated.
 
-Restart cancels pending signals and preserves open positions; it requires fresh authentication and a current instrument master. Settings/credential changes require stopping the account worker; reconnect afterward. The legacy single-account service remains separate—do not run it against a portal user's database.
+Restart cancels pending signals and preserves open positions; it requires fresh authentication and a current instrument master. Settings reload while the worker stays online, with entries paused and no open/pending trades. Credential changes still require stopping the account worker; reconnect afterward. The legacy single-account service remains separate—do not run it against a portal user's database.
 
 ## EC2 private dashboard
 

@@ -44,6 +44,7 @@ class Accounts:
                 "history": history,
                 "pnl": report(state, user["settings"]["quote_max_age_seconds"]),
                 "mode": "paper",
+                "ledger_started": path.exists(),
             }
 
     def active_positions(self, uid):
@@ -88,18 +89,45 @@ class Accounts:
         with self.store.lock(uid):
             if (
                 self.store.user(uid)["enabled"]
-                or self.store.worker_running(uid)
                 or self.active_positions(uid)
             ):
                 raise ValueError(
-                    "Pause entries, stop the worker and finish open paper trades before changing settings"
+                    "Pause entries and finish open paper trades before changing settings. The worker can stay online."
                 )
             # Starting paper capital cannot rewrite an existing ledger.
             if (self.store.account_dir(uid) / "paper.db").exists() and dec(settings["paper_cash"]) != dec(
                 self.store.user(uid)["settings"]["paper_cash"]
             ):
-                raise ValueError("Starting capital is fixed after the first paper event")
+                raise ValueError("Starting capital is fixed after the first paper event. Use Adjust paper balance instead.")
             self.store.save_settings(uid, settings)
+
+    def adjust_balance(self, uid, amount, reason):
+        amount = dec(amount)
+        if not 0 <= amount <= 100000000 or amount != amount.quantize(dec("0.01")):
+            raise ValueError("Enter a balance between 0 and 100,000,000 with at most two decimals")
+        reason = reason.strip()
+        if not reason or len(reason) > 200:
+            raise ValueError("Enter a reason of 1–200 characters")
+        with self.store.lock(uid):
+            if self.store.user(uid)["enabled"] or self.active_positions(uid):
+                raise ValueError("Pause entries and finish open paper trades before adjusting the balance")
+            engine = self.engine(uid, {"synthetic": False, "contracts": []})
+            try:
+                with engine.db:
+                    state = engine.state()
+                    before = dec(state["cash"])
+                    if before == amount:
+                        return  # Retrying the same target balance does not duplicate adjustments.
+                    state["cash"] = str(amount)
+                    engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(state),))
+                    engine.db.execute(
+                        "INSERT INTO audit(at,event,body) VALUES(?,?,?)",
+                        (datetime.now(timezone.utc).isoformat(), "PAPER_BALANCE_ADJUSTED",
+                         dumps({"before": before, "after": amount, "adjustment": amount - before,
+                                "reason": reason})),
+                    )
+            finally:
+                engine.db.close()
 
     def process(self, uid, event, master, now=None, synthetic=False):
         """Internal interface, never exposed as a browser endpoint."""

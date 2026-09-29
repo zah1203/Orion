@@ -210,6 +210,69 @@ class PortalTests(unittest.TestCase):
             422,
         )
 
+    def test_settings_save_with_worker_online_and_pause_required(self):
+        import fcntl
+        cfg = self.store.user(self.alice)["settings"]
+        cfg["max_lots"] = 2
+        with open(self.store.account_dir(self.alice) / "worker.lock", "a") as lease:
+            fcntl.flock(lease, fcntl.LOCK_EX)
+            self.store.heartbeat(self.alice)
+            self.accounts.save_settings(self.alice, cfg)
+            self.assertEqual(self.store.config(self.alice)["max_lots"], 2)
+            self.accounts.set_enabled(self.alice, True)
+            with self.assertRaisesRegex(ValueError, "Pause entries"):
+                self.accounts.save_settings(self.alice, cfg)
+
+    def test_balance_adjustment_preserves_history_pnl_and_isolates_account(self):
+        import fcntl
+        self.accounts.set_enabled(self.alice, True)
+        for event in self.events:
+            self.accounts.process(self.alice, event, self.master, stamp(event["source_time"]), True)
+        self.accounts.set_enabled(self.alice, False)
+        before = self.accounts.summary(self.alice)
+        bob = self.accounts.summary(self.bob)
+        with open(self.store.account_dir(self.alice) / "worker.lock", "a") as lease:
+            fcntl.flock(lease, fcntl.LOCK_EX)
+            for _ in range(2):
+                r = self.post("/api/paper-balance", {"amount": 200000, "reason": "Test capital"})
+                self.assertEqual(r.status_code, 200, r.text)
+        after = self.accounts.summary(self.alice)
+        self.assertEqual(float(after["state"]["cash"]), 200000)
+        for field in ("positions", "days", "fingerprints", "last_quotes"):
+            self.assertEqual(after["state"][field], before["state"][field])
+        for key in ("realized", "unrealized", "total", "trades"):
+            self.assertEqual(after["pnl"]["totals"][key], before["pnl"]["totals"][key])
+        self.assertEqual(after["settings"], before["settings"])
+        self.assertEqual(len(after["history"]), len(before["history"]) + 1)
+        self.assertEqual(after["history"][0]["event"], "PAPER_BALANCE_ADJUSTED")
+        self.assertEqual(self.accounts.summary(self.bob)["state"], bob["state"])
+
+    def test_balance_guards_auth_validation_and_open_positions(self):
+        body = {"amount": 50000, "reason": "More paper capital"}
+        self.assertEqual(self.client.post("/api/paper-balance", json=body,
+                         headers={"Origin": ORIGIN}).status_code, 403)
+        self.assertEqual(self.post("/api/paper-balance", {**body, "user_id": self.bob}).status_code, 422)
+        for amount in (-1, 100000001):
+            self.assertEqual(self.post("/api/paper-balance", {**body, "amount": amount}).status_code, 422)
+        self.assertEqual(self.post("/api/paper-balance", {**body, "amount": 1.001}).status_code, 409)
+        self.assertEqual(self.post("/api/paper-balance", {**body, "reason": " "}).status_code, 409)
+        self.accounts.set_enabled(self.alice, True)
+        self.assertEqual(self.post("/api/paper-balance", body).status_code, 409)
+        for event in self.events[:3]:
+            self.accounts.process(self.alice, event, self.master, stamp(event["source_time"]), True)
+        self.accounts.set_enabled(self.alice, False)
+        before = self.accounts.summary(self.alice)["state"]
+        self.assertEqual(self.post("/api/paper-balance", body).status_code, 409)
+        self.assertEqual(self.accounts.summary(self.alice)["state"], before)
+
+    def test_balance_before_first_event_initializes_ledger_without_changing_starting_cash(self):
+        starting = self.store.user(self.alice)["settings"]["paper_cash"]
+        self.assertEqual(self.post("/api/paper-balance", {"amount": 12345, "reason": "Initial test"}).status_code, 200)
+        summary = self.accounts.summary(self.alice)
+        self.assertTrue(summary["ledger_started"])
+        self.assertEqual(float(summary["state"]["cash"]), 12345)
+        self.assertEqual(summary["settings"]["paper_cash"], starting)
+
     def test_security_headers_and_static_dashboard(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)

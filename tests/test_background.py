@@ -180,6 +180,23 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
                     with sqlite3.connect(paper) as db:
                         self.assertEqual(db.execute("SELECT count(*) FROM source_events").fetchone()[0], 2)
                     self.assertEqual(store.health(uid)["last_channel"], "-100222")
+                    # Changing the channel allowlist while the same worker runs
+                    # takes effect in the Telegram filter and ingestion guard.
+                    from orion.portal.service import Accounts
+                    accounts = Accounts(store, defaults())
+                    accounts.set_enabled(uid, False)
+                    changed = store.user(uid)["settings"]
+                    changed["channels"] = {"-100333": cfg["channels"]["-100111"]}
+                    accounts.save_settings(uid, changed)
+                    self.assertFalse(handlers[0][1].func(event(-100111, 3, "old")))
+                    self.assertTrue(handlers[0][1].func(event(-100333, 4, "new")))
+                    await handlers[0][0](event(-100111, 3, "old"))
+                    await handlers[0][0](event(-100333, 4, "new"))
+                    with sqlite3.connect(paper) as db:
+                        bodies = [json.loads(r[0]) for r in db.execute("SELECT body FROM source_events")]
+                    self.assertEqual(len(bodies), 3)
+                    self.assertEqual(bodies[-1]["channel_id"], "-100333")
+
                 finally:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
