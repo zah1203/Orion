@@ -80,8 +80,12 @@ performed on EC2; local mocked tests do not prove deployed connectivity.
 * Telegram temporary reconnects use Telethon's reconnect behavior. A terminal
   disconnect/error restarts the service after 30 seconds. Messages delivered while
   disconnected may be missing; there is no historical backfill in this release.
-* Channel/instrument settings changes still require pausing entries, stopping the
-  account service and finishing open paper trades. Channel filters load at startup.
+* Use **Pause and edit settings** in the dashboard. Pending calls are cancelled;
+  open paper trades keep being monitored and block settings/balance changes until
+  closed. With no open trades, save channel, instrument and risk changes while
+  the worker stays online. Filters and entry limits reload for incoming events.
+  Enable entries explicitly when ready. Credential replacement still requires
+  stopping the worker.
 * Health separates worker heartbeat, Telegram, broker, catalogue and last quote.
   An online worker is not proof of a fresh market feed.
 * The service runs overnight and continues monitoring filled BTST paper positions.
@@ -91,3 +95,18 @@ performed on EC2; local mocked tests do not prove deployed connectivity.
 
 Journal output is limited to engine events and exception class names. Stored
 messages grow over time; monitor disk usage. No automatic purge is added here.
+
+## Paper balance adjustments
+
+The dashboard's **Adjust paper balance** sets current simulated cash, separately
+from starting capital. Entries must be paused and no OPEN/PENDING positions may
+remain. A reason is required. Each changed balance is recorded with before/after
+values in `PAPER_BALANCE_ADJUSTED`; retrying the same target is a no-op. Trades,
+deduplication, realized P&L and daily entry/loss counters are preserved. This is not
+a profit event or a reset of daily limits. The worker can remain online.
+
+Deploy this application update once using the existing deployment workflow, then
+restart the portal and account service as described above. Existing workers must
+load this release before using live settings edits. Subsequent settings and balance
+changes require no terminal access. Broker authentication and daily catalogue
+refresh requirements are unchanged.

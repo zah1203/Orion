@@ -21,16 +21,35 @@ async function refresh(fill=false){
  : 'Worker offline — no active monitoring confirmed.';
  $('#greeting').textContent=`WELCOME, ${data.username}`;$('#cash').textContent=money(data.state.cash);$('#entry-state').textContent=data.enabled?'Enabled':'Paused';$('#worker-state').textContent=data.worker_online?'Online · paper':'Offline';
  $('#enable').disabled=data.enabled;$('#pause').disabled=!data.enabled;
+ const active=Object.values(data.state.positions||{}).some(p=>['OPEN','PENDING'].includes(p.status));
+ $('#settings-fields').disabled=data.enabled||active;
+ $('#balance-fields').disabled=data.enabled||active;
+ $('#settings-form').elements.paper_cash.readOnly=data.ledger_started;
+ $('#settings-status').textContent=data.enabled?'Click Pause and edit settings to make changes.':active?'Entries paused. Settings and balance changes are blocked until open paper trades finish; monitoring continues.':'Ready to edit. The worker stays online. Save your changes, then enable entries when ready.';
  await refreshConnections();
  if(fill)fillSettings(data.settings);
  renderPnl(data.pnl);
- $('#history').replaceChildren();for(const event of data.history){const el=document.createElement('p');el.className='activity';el.textContent=`${event.at} · ${event.event}${event.signal_id?' · '+event.signal_id:''}`;$('#history').append(el);}
+ $('#history').replaceChildren();for(const event of data.history){const el=document.createElement('p');el.className='activity';el.textContent=`${event.at} · ${event.event}${event.signal_id?' · '+event.signal_id:''}${event.event==='PAPER_BALANCE_ADJUSTED'?' · '+money(event.before)+' → '+money(event.after)+' · '+event.reason:''}`;$('#history').append(el);}
  if(!data.history.length)$('#history').textContent='Your account has no activity yet.';
 }
 function bind(selector,fn){$(selector).addEventListener('click',async e=>{e.preventDefault();const button=e.currentTarget;button.disabled=true;try{await fn();}catch(err){notice(err.message,true);}finally{button.disabled=false;}});}
 $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;try{const d=await api('/api/login','POST',{username:form.username.value,password:form.password.value});csrf=d.csrf;form.password.value='';await refresh(true);notice('Signed in.');}catch(err){form.password.value='';notice(err.message,true);}});
 bind('#logout',async()=>{await api('/api/logout','POST',{});csrf='';current=null;$('#dashboard').hidden=true;$('#login-view').hidden=false;$('#logout').hidden=true;resetConnections();$('#demo-result').textContent='';notice('Signed out.');});
-$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,body={};for(const key of numericFields)body[key]=Number(form.elements[key].value);body.index_channel=form.index_channel.value.trim();body.commodity_channel=form.commodity_channel.value.trim();body.products=[...document.querySelectorAll('[name=product]:checked')].map(i=>i.value);try{await api('/api/settings','PUT',body);await refresh(true);notice('Settings saved.');}catch(err){notice(err.message,true);}});
+$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,body={};for(const key of numericFields)body[key]=Number(form.elements[key].value);body.index_channel=form.index_channel.value.trim();body.commodity_channel=form.commodity_channel.value.trim();body.products=[...document.querySelectorAll('[name=product]:checked')].map(i=>i.value);try{await api('/api/settings','PUT',body);await refresh(true);notice('Settings saved. The worker reads the new settings automatically. Entries remain paused.');}catch(err){notice(err.message,true);}});
+bind('#edit-settings',async()=>{
+ await api('/api/control','POST',{enabled:false});await refresh();
+ $('#settings-form').scrollIntoView({behavior:'smooth',block:'start'});
+ notice('Entries paused and pending calls cancelled. Open trades continue to be monitored.');
+});
+$('#balance-form').addEventListener('submit',async e=>{
+ e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');
+ const amount=Number(form.amount.value),reason=form.reason.value.trim();
+ if(!reason){notice('Enter a reason for the balance adjustment.',true);return;}
+ if(!confirm(`Set your paper cash to ${money(amount)}? Trade history, P&L and daily limits will be preserved.`))return;
+ button.disabled=true;
+ try{await api('/api/paper-balance','POST',{amount,reason});form.reset();await refresh(true);notice('Paper balance adjusted. Trade history and P&L preserved. Entries remain paused.');}
+ catch(err){notice(err.message,true);}finally{button.disabled=false;}
+});
 for(const [id,enabled] of [['#enable',true],['#pause',false]])bind(id,async()=>{await api('/api/control','POST',{enabled});await refresh();notice(enabled?'Paper entries enabled. An authenticated worker must be online to receive calls.':'New entries paused. Open paper positions still need a running worker.');});
 bind('#demo',async()=>{const d=await api('/api/demo','POST',{});$('#demo-result').hidden=false;$('#demo-result').textContent=d.note+'\n\n'+d.events.map(x=>JSON.stringify(x)).join('\n')+'\n\nFinal demo cash: '+money(d.state.cash);});
 refresh(true).catch(()=>{});
