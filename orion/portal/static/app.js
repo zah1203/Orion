@@ -17,9 +17,15 @@ async function refresh(fill=false){
  const data=await api('/api/me');current=data;csrf=data.csrf;$('#login-view').hidden=true;$('#dashboard').hidden=false;$('#logout').hidden=false;
  const health=data.worker_health||{};
  $('#worker-health').textContent=data.worker_online
- ? `Telegram: ${health.telegram||'legacy worker'} · Kotak: ${health.broker||'unknown'} · Catalogue: ${health.catalogue||'unknown'} · Last message: ${health.last_message_at||'none this run'} · Last quote: ${health.last_quote_at||'none this run'}`
+ ? `Telegram: ${health.telegram||'legacy worker'} · Kotak: ${health.broker||'unknown'} · Catalogue: ${health.catalogue||'unknown'} · Refresh: ${health.catalogue_refresh||'awaiting status'}${health.catalogue_refreshed_at?' · Last validated: '+health.catalogue_refreshed_at:''} · Last message: ${health.last_message_at||'none this run'} · Last quote: ${health.last_quote_at||'none this run'}`
  : 'Worker offline — no active monitoring confirmed.';
- $('#greeting').textContent=`WELCOME, ${data.username}`;$('#cash').textContent=money(data.state.cash);$('#entry-state').textContent=data.enabled?'Enabled':'Paused';$('#worker-state').textContent=data.worker_online?'Online · paper':'Offline';
+ const blockers=[];
+ if(!data.worker_online)blockers.push('worker offline');
+ if(health.catalogue!=='current')blockers.push('catalogue missing or stale');
+ if(health.telegram!=='connected')blockers.push('Telegram not connected');
+ if(health.broker!=='connected')blockers.push('Kotak authentication or feed connection required');
+ $('#greeting').textContent=`WELCOME, ${data.username}`;$('#cash').textContent=money(data.state.cash);$('#entry-state').textContent=!data.enabled?'Paused':blockers.length?'Enabled · waiting':'Enabled';$('#worker-state').textContent=data.worker_online?'Online · paper':'Offline';
+ if(data.enabled&&blockers.length)$('#worker-health').textContent+=' · New entries blocked: '+blockers.join('; ');
  $('#enable').disabled=data.enabled;$('#pause').disabled=!data.enabled;
  const active=Object.values(data.state.positions||{}).some(p=>['OPEN','PENDING'].includes(p.status));
  $('#settings-fields').disabled=data.enabled||active;
@@ -29,7 +35,7 @@ async function refresh(fill=false){
  await refreshConnections();
  if(fill)fillSettings(data.settings);
  renderPnl(data.pnl);
- $('#history').replaceChildren();for(const event of data.history){const el=document.createElement('p');el.className='activity';el.textContent=`${event.at} · ${event.event}${event.signal_id?' · '+event.signal_id:''}${event.event==='PAPER_BALANCE_ADJUSTED'?' · '+money(event.before)+' → '+money(event.after)+' · '+event.reason:''}`;$('#history').append(el);}
+ $('#history').replaceChildren();for(const event of data.history){const el=document.createElement('p');el.className='activity';el.textContent=`${event.at} · ${event.event}${event.signal_id?' · '+event.signal_id:''}${event.event==='PAPER_BALANCE_ADJUSTED'?' · '+money(event.before)+' → '+money(event.after)+' · '+event.reason:event.reason?' · '+event.reason:''}`;$('#history').append(el);}
  if(!data.history.length)$('#history').textContent='Your account has no activity yet.';
 }
 function bind(selector,fn){$(selector).addEventListener('click',async e=>{e.preventDefault();const button=e.currentTarget;button.disabled=true;try{await fn();}catch(err){notice(err.message,true);}finally{button.disabled=false;}});}
