@@ -175,6 +175,12 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(db.execute("SELECT count(*) FROM source_events").fetchone()[0], 2)
                         state = json.loads(db.execute("SELECT body FROM state").fetchone()[0])
                         self.assertFalse(state["positions"])
+                        paused = json.loads(db.execute(
+                            "SELECT body FROM audit WHERE event='ENTRIES_PAUSED' ORDER BY seq LIMIT 1"
+                        ).fetchone()[0])
+                        self.assertIn("Catalogue missing or stale", paused["reason"])
+                        self.assertIn("Kotak authentication required", paused["reason"])
+                    self.assertTrue(store.user(uid)["enabled"])  # Readiness never changes the user's switch.
                     # A later session cannot replay already archived messages.
                     save(store, uid, creds, dict(edit_token="TOKEN", edit_sid="SID", ucc="UCC"))
                     with sqlite3.connect(paper) as db:

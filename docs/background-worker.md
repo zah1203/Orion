@@ -70,10 +70,26 @@ performed on EC2; local mocked tests do not prove deployed connectivity.
   retry. Existing paper positions remain recorded; while quotes are absent,
   stops and targets cannot be simulated. On reconnection only fresh quotes apply;
   there is no reconstruction of missed intraday prices.
-* Daily master exports and the economics verification remain operator-managed.
-  Do not simply redate yesterday's CSV/profile. Refresh from the broker and review
-  contract economics, then import the catalogue. Atomic replacement is picked up
-  by the running background worker; an old catalogue blocks new entries.
+* The background worker refreshes stale/missing catalogues daily from 08:30 IST,
+  including weekends (no exchange holiday calendar). On startup after 08:30 it
+  attempts immediately, then retries failures every five minutes. Before 08:30
+  it shows the scheduled time. The worker must be running; no separate cron is needed.
+  New entries remain blocked until today's catalogue passes validation.
+* Refresh downloads both broker exports with fresh dated checksum receipts and
+  checks all selected products, lot sizes, units, precision, expiries and duplicate
+  identifiers. Approved economics come from the last catalogue's embedded profile,
+  or `economics.json` beside the master when no embedded profile is available.
+  The original `verified_on` and source are preserved, not redated. `verified_at`
+  records catalogue validation; `economics_reused` identifies reuse of approved rules.
+  Premium conversions and expiry cutoffs remain operator-approved assumptions;
+  downloads do not independently reverify them or prove the broker updated its source.
+  Economics changes require operator review and a manual validated import.
+* Concurrent account workers share a catalogue file lease. Downloads run outside
+  the event loop with bounded subprocess timeouts. Only a fully validated catalogue
+  atomically replaces the old file; failures preserve it and keep new entries blocked.
+  Temporary exports are removed after each attempt; their hashes remain in the master.
+  Existing open positions retain their stored contract data. Refresh never enables
+  paused entries, changes paper cash, replays signals, or submits broker orders.
 * Broker retries use the same cached session, not repeated TOTP login. After three
   failures, Telegram keeps listening and the UI requests reauthentication. A new
   successful UI login resets the retry budget.
@@ -108,5 +124,8 @@ a profit event or a reset of daily limits. The worker can remain online.
 Deploy this application update once using the existing deployment workflow, then
 restart the portal and account service as described above. Existing workers must
 load this release before using live settings edits. Subsequent settings and balance
-changes require no terminal access. Broker authentication and daily catalogue
-refresh requirements are unchanged.
+changes require no terminal access. Daily catalogue refresh is automatic after this
+release is deployed and the worker restarted. Daily Kotak authentication still uses
+the dashboard; this update does not generate OTPs. The dashboard distinguishes
+enabled intake from readiness blocks, shows refresh progress/failures and the last
+validation time. New `ENTRIES_PAUSED` events include the actual blocking reasons.

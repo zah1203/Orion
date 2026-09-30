@@ -6,7 +6,7 @@ separate verified profile; never infer commodity economics from lMultiplier.
 """
 
 import csv
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -29,10 +29,16 @@ def positive(value):
     return number
 
 
-def normalize(paths, profile, now):
+def validate_profile_date(profile, now, reuse_approved=False):
     today = now.astimezone(IST).date().isoformat()
-    if profile.get("verified_on") != today or not profile.get("source"):
+    verified = date.fromisoformat(profile.get("verified_on", "")).isoformat()
+    if not profile.get("source") or verified > today or (not reuse_approved and verified != today):
         raise ValueError("Economics profile needs today's verification date and source reference")
+
+
+def normalize(paths, profile, now, *, reuse_approved=False):
+    today = now.astimezone(IST).date().isoformat()
+    validate_profile_date(profile, now, reuse_approved)
     rules = profile.get("products", {})
     if not rules or set(rules) - PRODUCTS:
         raise ValueError("Select supported products in the economics profile")
@@ -112,6 +118,7 @@ def normalize(paths, profile, now):
         synthetic=False,
         as_of=today,
         verified_at=now.isoformat(),
+        economics_reused=reuse_approved,
         source_sha256=hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest(),
         sources=sources,
         economics=profile,

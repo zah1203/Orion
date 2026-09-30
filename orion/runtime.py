@@ -123,8 +123,21 @@ async def serve(
             connected = telegram.is_connected()
             background.state["telegram"] = "connected" if connected else "disconnected"
             authorized = background.session() is not None
-            if not current or not connected or not authorized or background.state["broker"] != "connected":
-                engine.cfg = {**engine.cfg, "new_entries_enabled": False}
+            blockers = []
+            if not engine.cfg.get("new_entries_enabled", True):
+                blockers.append("Entries paused by user")
+            if not current:
+                blockers.append("Catalogue missing or stale")
+            if not connected:
+                blockers.append("Telegram disconnected")
+            if not authorized:
+                blockers.append("Kotak authentication required")
+            elif background.state["broker"] != "connected":
+                blockers.append("Kotak feed not connected")
+            background.state["entry_blockers"] = blockers
+            engine.cfg = {**engine.cfg, "entry_block_reason": "; ".join(blockers)}
+            if blockers:
+                engine.cfg["new_entries_enabled"] = False
             if not current or not connected or not authorized:
                 cancel_pending(locked=locked)
 
@@ -322,6 +335,8 @@ async def serve(
             group.create_task(telegram_loop())
             group.create_task(watchdog())
             group.create_task(broker_loop())
+            if background:
+                group.create_task(background.refresh_catalogue())
     finally:
         await telegram.disconnect()
         # Do not invalidate a reusable broker session on worker shutdown.

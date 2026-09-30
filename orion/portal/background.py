@@ -1,11 +1,13 @@
 """Non-interactive worker controls; Telegram remains independent of broker login."""
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 
 from ..core import IST
 from .broker_session import load
+from .catalogue_refresh import refresh
 
 
 class Background:
@@ -27,6 +29,32 @@ class Background:
 
     def session(self):
         return load(self.store, self.uid)
+
+    async def refresh_catalogue(self):
+        next_attempt = None
+        while True:
+            now = datetime.now(IST)
+            _, current = self.catalogue()
+            morning = now.replace(hour=8, minute=30, second=0, microsecond=0)
+            if current:
+                self.status(catalogue_refresh="Current",
+                            catalogue_refreshed_at=self.master.get("verified_at"))
+                next_attempt = None
+            elif now < morning:
+                self.status(catalogue_refresh="Scheduled for 08:30 IST")
+            elif next_attempt is None or now >= next_attempt:
+                self.status(catalogue_refresh="Downloading and validating broker exports")
+                try:
+                    result = await asyncio.to_thread(
+                        refresh, self.path, self.store.user(self.uid)["username"]
+                    )
+                except Exception:
+                    # Never expose SDK exceptions, URLs or credentials in health output.
+                    result = {"catalogue_refresh": "Refresh failed; retrying in 5 minutes"}
+                self.catalogue()
+                self.status(**result)
+                next_attempt = datetime.now(IST) + timedelta(minutes=5)
+            await asyncio.sleep(30)
 
     def catalogue(self):
         try:

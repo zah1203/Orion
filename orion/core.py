@@ -274,7 +274,8 @@ class Engine:
             position["exit_requested"] = True
             return emit("PROVIDER_EXIT_PENDING_QUOTE", signal_id=signal_id)
         if not self.cfg.get("new_entries_enabled", True):
-            return emit("ENTRIES_PAUSED", signal_id=key)
+            return emit("ENTRIES_PAUSED", signal_id=key,
+                        reason=self.cfg.get("entry_block_reason") or "Entries paused by user")
         age = (now - stamp(e["source_time"])).total_seconds()
         if age < -5 or age > self.cfg["signal_max_age_seconds"]:
             return emit("STALE_SIGNAL", signal_id=key)
@@ -344,7 +345,8 @@ class Engine:
             if p["status"] == "PENDING":
                 if not self.cfg.get("new_entries_enabled", True):
                     p["status"] = "CANCELLED"
-                    emit("ENTRIES_PAUSED", signal_id=key)
+                    emit("ENTRIES_PAUSED", signal_id=key,
+                         reason=self.cfg.get("entry_block_reason") or "Entries paused by user")
                     continue
                 signal_date = stamp(p["source_time"]).astimezone(IST).date().isoformat()
                 pending_expired = (
