@@ -85,6 +85,10 @@ function resetConnections(){
 async function refreshConnections(){
  const d=await api('/api/connections');
  const fields=current.credentials.saved_fields;
+ $('#setup-telegram').textContent=d.telegram.linked?'Account linked':'Connect your Telegram account';
+ const channelCount=Object.keys(current.settings.channels||{}).length;
+ $('#setup-channels').textContent=channelCount?`${channelCount} channel profile(s) selected`:'Choose your channels';
+ $('#setup-broker').textContent=current.worker_health?.broker==='connected'?'Feed connected':d.kotak.checked_at?'Session saved · check feed status':'Connect your Kotak Neo account';
  $('#telegram-status').textContent=`${fields.includes('telegram_api_id')&&fields.includes('telegram_api_hash')?'API details saved.':'Save API ID and hash first.'} ${d.telegram.linked?'Authorized session saved.':'Not linked.'}${d.telegram.checked_at?' Last checked: '+new Date(d.telegram.checked_at*1000).toLocaleString():''}`;
  $('#kotak-status').textContent=d.kotak.checked_at?'Authentication verified at '+new Date(d.kotak.checked_at*1000).toLocaleString()+'. This is a past check, not an active worker connection.':(fields.some(k=>k.startsWith('kotak_'))?'Credentials saved; not validated.':'Save Kotak credentials first.');
  $('#telegram-code').hidden=d.telegram.step!=='code';
@@ -141,4 +145,13 @@ bind('#use-channels',async()=>{
 connectionForm('kotak-verify',async form=>{
  const totp=form.totp.value;form.totp.value='';notice('Checking Kotak authentication…');
  const d=await api('/api/connections/kotak/verify','POST',{totp});await refresh();notice(d.message);
+});
+
+$('#register-form').addEventListener('submit',async e=>{
+ e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');button.disabled=true;
+ try{await api('/api/register','POST',{username:form.username.value.trim(),password:form.password.value});
+ $('#login-form').username.value=form.username.value.trim();form.reset();
+ notice('Account created. Sign in to connect your Telegram and Kotak Neo accounts.');
+ $('#login-form').password.focus();
+ }catch(err){notice(err.message,true);}finally{form.password.value='';button.disabled=false;}
 });
