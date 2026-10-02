@@ -142,6 +142,41 @@ class EngineTests(unittest.TestCase):
         self.quote(170)
         self.assertEqual(self.pos()["status"], "REJECTED")
 
+    def test_provider_target_label_and_buy_at(self):
+        for label in ("TGT", "TARGET", "TARGETS"):
+            text = SIGNAL.replace("TGT", label + ":").replace("BUY 170", "BUY AT 169-171")
+            parsed = parse_signal(text, TIME)
+            self.assertEqual(parsed["entry_mode"], "range")
+            self.assertEqual(parsed["targets"], ["180", "200", "220"])
+        self.msg(text=SIGNAL.replace("TGT", "TARGET:"))
+        self.quote(169)
+        self.quote(170)
+        self.assertEqual(self.pos()["status"], "OPEN")
+
+    def test_budget_rejection_explains_risk_without_changing_cash(self):
+        self.cfg["risk_per_trade"] = "10"
+        self.msg()
+        self.quote(169)
+        out = self.quote(170)
+        event = next(e for e in out if e["event"] == "INSUFFICIENT_BUDGET")
+        self.assertEqual(event["required_risk_one_lot"], "255.0")
+        self.assertEqual(event["required_cash_one_lot"], "1730.0")
+        self.assertEqual(event["blockers"], ["risk per trade"])
+        self.assertIn("available INR 10.00", event["reason"])
+        self.assertEqual(self.engine.state()["cash"], self.cfg["paper_cash"])
+
+    def test_budget_rejection_identifies_cash_and_open_risk(self):
+        self.cfg["max_open_risk"] = "20"
+        with self.engine.db:
+            state = self.engine.state()
+            state["cash"] = "100"
+            self.engine.db.execute("UPDATE state SET body=? WHERE id=1", (json.dumps(state),))
+        self.msg()
+        self.quote(169)
+        event = self.quote(170)[0]
+        self.assertEqual(event["blockers"], ["remaining open risk", "available cash"])
+        self.assertEqual(self.pos()["status"], "REJECTED")
+
     def test_closed_market_blocks_entry(self):
         self.msg()
         self.quote(169)

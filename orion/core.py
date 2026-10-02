@@ -85,14 +85,14 @@ def parse_signal(text, source_time):
             raise ValueError("Explicit BUY required")
         low, high = map(dec, entry.groups())
     else:
-        entry = re.search(r"\bBUY\s+(ABOVE\s+)?" + NUM + r"(?:\s*[-–]\s*" + NUM + r")?", t)
+        entry = re.search(r"\bBUY\s+(?:AT\s+)?(ABOVE\s+)?" + NUM + r"(?:\s*[-–]\s*" + NUM + r")?", t)
         if not entry:
             raise ValueError("Missing entry")
         above, a, b = entry.groups()
         low, high = dec(a), dec(b or a)
         mode = "above" if above else ("range" if b else "cross")
     stop = re.search(r"\b(?:SL|STOP LOSS)\s*:?\s*" + NUM, t)
-    compact = re.search(r"\bTGT\s*:?\s*" + NUM + r"\s*/\s*" + NUM + r"\s*/\s*" + NUM, t)
+    compact = re.search(r"\b(?:TGT|TARGETS?)\s*:?\s*" + NUM + r"\s*/\s*" + NUM + r"\s*/\s*" + NUM, t)
     if compact:
         targets = list(map(dec, compact.groups()))
     else:
@@ -416,7 +416,29 @@ class Engine:
                 )
                 if lots < 1:
                     p["status"] = "REJECTED"
-                    emit("INSUFFICIENT_BUDGET", signal_id=key)
+                    required_risk = risk_lot + 4 * fee
+                    required_cash = ask * multiplier + fee
+                    blockers = []
+                    if required_risk > dec(self.cfg["risk_per_trade"]):
+                        blockers.append("risk per trade")
+                    if required_risk > max(Decimal(0), dec(self.cfg["max_open_risk"]) - existing_risk):
+                        blockers.append("remaining open risk")
+                    if required_cash > dec(s["cash"]):
+                        blockers.append("available cash")
+                    if self.cfg["max_lots"] < 1:
+                        blockers.append("maximum lots")
+                    emit(
+                        "INSUFFICIENT_BUDGET", signal_id=key,
+                        contract=c["symbol"], blockers=blockers,
+                        required_risk_one_lot=str(required_risk),
+                        required_cash_one_lot=str(required_cash),
+                        risk_budget=str(risk_budget), available_cash=str(s["cash"]),
+                        reason=(f"{c['symbol']}: one lot needs INR {required_risk:.2f} risk "
+                                f"including fee reserve (available INR {risk_budget:.2f}), "
+                                f"and INR {required_cash:.2f} cash "
+                                f"(available INR {dec(s['cash']):.2f}). "
+                                f"Blocked by: {', '.join(blockers)}."),
+                    )
                     continue
                 p.update(
                     status="OPEN",
