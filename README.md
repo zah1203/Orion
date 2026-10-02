@@ -73,7 +73,7 @@ Crude uses the same complete-call grammar but needs representative provider exam
 
 ## Deploy and operate
 
-Follow [setup](docs/setup.md). No Jenkins or additional always-running machine is required. Your laptop is only needed for initial setup and administration; EC2 hosts the process. This build uses daily manual Kotak TOTP authentication and does not promise unattended session renewal.
+Follow [setup](docs/setup.md). No Jenkins or additional always-running machine is required. Your laptop is only needed for initial setup and administration; EC2 hosts the process. Connect Kotak once; Orion reuses the encrypted session across calendar days while the broker accepts it. Pause and Enable control paper entries. Broker expiry/revocation or repeated feed failures can still require reconnection; this build does not generate TOTP automatically.
 
 The app installer preserves configuration, Telegram session and SQLite data, installs a tested version under `/opt/orion/releases/<commit>`, changes the `current` link and leaves the service stopped. Broker/Telegram secrets belong in AWS Secrets Manager, never Git, Terraform variables, screenshots, or GitHub workflow inputs.
 

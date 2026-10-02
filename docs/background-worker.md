@@ -14,9 +14,9 @@ portal key, bound to the account and its credential fingerprint. Neither TOTP no
 an authenticator seed is stored. Tokens never return to the browser or journal.
 
 The service polls the cache and picks up new sessions without restarting Telegram.
-Restarting the service reuses a cached session while Kotak accepts it. Orion's
-conservative local reuse limit is midnight IST; it is NOT a guarantee of the
-broker's token lifetime. After expiry, revocation, or three failed feed attempts,
+Restarting the service reuses a cached session while Kotak accepts it. Orion does not end reuse at midnight IST. Legacy cached midnight cutoffs are also
+ignored because they were local policy, not broker expiry metadata. This does not
+extend the broker's token lifetime. After expiry, revocation, or three failed feed attempts,
 reauthenticate in the UI. This release does not automate daily TOTP generation.
 UI authentication requires paused entries but does not require stopping the service.
 Credential replacement and Telegram relinking still require stopping the worker.
