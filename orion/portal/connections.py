@@ -273,5 +273,5 @@ class Connections:
             self.store.save_credentials(uid, {"kotak_checked_at": time.time()})
             return {
                 "ok": True,
-                "message": "Kotak authentication verified. Feed session saved encrypted for the background worker; no order placed. Reuse is limited to this IST day and broker acceptance.",
+                "message": "Kotak authentication verified. Feed session saved encrypted for the background worker; no order placed. Orion reuses this connection automatically while Kotak accepts it. Reconnect only if required.",
             }

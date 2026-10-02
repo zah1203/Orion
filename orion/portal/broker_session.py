@@ -1,13 +1,10 @@
 """Encrypted, account-bound feed sessions. No TOTP seed or code is retained."""
 
-from datetime import datetime, timedelta
 import hashlib
 import json
-import time
 import uuid
 from urllib.parse import urlparse
 
-from ..core import IST
 
 FIELDS = ("edit_token", "edit_sid", "ucc", "sfeed_websocket_url", "feed_url")
 CREDENTIALS = ("kotak_consumer_key", "kotak_mobile", "kotak_ucc", "kotak_mpin")
@@ -54,11 +51,9 @@ def capture(client):
 
 def save(store, uid, creds, values):
     validate(values)
-    now = datetime.now(IST)
-    # Local reuse policy, not a claim about Kotak's actual token lifetime.
-    until = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), IST).timestamp()
+    # Reuse is subject to broker acceptance, not a local calendar cutoff.
     item = dict(
-        user_id=uid, version=uuid.uuid4().hex, expires=until, fingerprint=fingerprint(creds), values=values
+        user_id=uid, version=uuid.uuid4().hex, fingerprint=fingerprint(creds), values=values
     )
     encrypted = store.cipher.encrypt(json.dumps(item).encode())
     with store.db() as db:
@@ -76,7 +71,8 @@ def load(store, uid):
     item = json.loads(store.cipher.decrypt(row[0]))
     if item["user_id"] != uid:
         raise ValueError("Broker session ownership mismatch")
-    if item["expires"] <= time.time() or item["fingerprint"] != fingerprint(store.credentials(uid)):
+    # Legacy expires was Orion's midnight policy, never broker expiry metadata.
+    if item["fingerprint"] != fingerprint(store.credentials(uid)):
         return None
     validate(item["values"])
     return item

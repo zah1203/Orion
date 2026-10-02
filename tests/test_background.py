@@ -33,17 +33,21 @@ class Sessions(unittest.TestCase):
         self.store.save_credentials(self.uid, self.creds)
         self.values = dict(edit_token="SECRET-TOKEN", edit_sid="SECRET-SID", ucc="UCC")
 
-    def test_encrypted_reuse_expiry_and_credential_binding(self):
+    def test_encrypted_reuse_and_credential_binding(self):
         save(self.store, self.uid, self.creds, self.values)
         with self.store.db() as db:
             ciphertext = db.execute("SELECT ciphertext FROM broker_sessions").fetchone()[0]
         self.assertNotIn(b"SECRET", ciphertext)
         reopened = Store(self.tmp.name, self.key)
         self.assertEqual(load(reopened, self.uid)["values"], self.values)
-        with patch(
-            "orion.portal.broker_session.time.time", return_value=load(self.store, self.uid)["expires"]
-        ):
-            self.assertIsNone(load(self.store, self.uid))
+        self.assertNotIn("expires", load(self.store, self.uid))
+        # The legacy cutoff was an app policy, not an expiry supplied by Kotak.
+        legacy = load(self.store, self.uid)
+        legacy["expires"] = 1
+        with self.store.db() as db:
+            db.execute("UPDATE broker_sessions SET ciphertext=? WHERE user_id=?",
+                       (self.store.cipher.encrypt(json.dumps(legacy).encode()), self.uid))
+        self.assertEqual(load(self.store, self.uid)["values"], self.values)
         other = self.store.create_user("bob", "long test password", defaults())
         self.assertIsNone(load(self.store, other))
         with self.store.db() as db:
