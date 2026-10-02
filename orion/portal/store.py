@@ -97,6 +97,22 @@ class Store:
         self.account_dir(uid)
         return uid
 
+    def register(self, username, password, settings, ip):
+        # Reserve an attempt before expensive password hashing, including failures.
+        bucket = "signup:" + hashlib.sha256(ip.encode()).hexdigest()
+        now = time.time()
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM attempts WHERE at<?", (now - 900,))
+            count = db.execute("SELECT count(*) FROM attempts WHERE bucket=?", (bucket,)).fetchone()[0]
+            if count >= 5:
+                raise ValueError("Try again later")
+            db.execute("INSERT INTO attempts VALUES(?,?)", (bucket, now))
+        try:
+            return self.create_user(username, password, settings)
+        except sqlite3.IntegrityError:
+            raise ValueError("Unable to create account with that username") from None
+
     def user(self, uid):
         with self.db() as db:
             row = db.execute("SELECT id,username,settings,enabled FROM users WHERE id=?", (uid,)).fetchone()

@@ -1,4 +1,4 @@
-"""Same-origin private pilot dashboard. Accounts are provisioned by an operator."""
+"""Same-origin private pilot dashboard. Isolated paper accounts with self-service registration."""
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
@@ -33,6 +33,10 @@ class Strict(BaseModel):
 class Login(Strict):
     username: str = Field(min_length=3, max_length=40)
     password: str = Field(min_length=1, max_length=128)
+
+
+class Register(Login):
+    password: str = Field(min_length=12, max_length=128)
 
 
 class Settings(Strict):
@@ -163,6 +167,14 @@ def create_app(root, key, origin):
     @app.get("/")
     def home():
         return FileResponse(STATIC / "index.html")
+
+    @app.post("/api/register", status_code=201)
+    def register(body: Register, request: Request):
+        try:
+            store.register(body.username, body.password, defaults(), request.client.host)
+        except ValueError as exc:
+            raise HTTPException(429 if str(exc) == "Try again later" else 400, str(exc)) from None
+        return {"ok": True, "mode": "paper"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request):
