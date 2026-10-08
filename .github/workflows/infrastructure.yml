@@ -30,6 +30,7 @@ jobs:
       TF_VAR_secret_arn: ${{ vars.SECRET_ARN }}
       TF_VAR_artifact_bucket: ${{ vars.ARTIFACT_BUCKET }}
       TF_VAR_ami_id: ${{ vars.AMI_ID }}
+      TF_VAR_public_web_enabled: ${{ vars.PUBLIC_WEB_ENABLED || 'false' }}
       PLAN_ACTION: ${{ inputs.action }}
       PLAN_KEY: ${{ inputs.plan_key }}
       PLAN_SHA256: ${{ inputs.plan_sha256 }}

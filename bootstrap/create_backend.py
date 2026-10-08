@@ -7,6 +7,7 @@ import boto3
 
 p = argparse.ArgumentParser()
 p.add_argument("--prefix", required=True, help="Globally unique lowercase bucket prefix")
+p.add_argument("--public-web", action="store_true", help="Also grant deployment permissions for the optional API Gateway/Cloud Map")
 p.add_argument(
     "--oidc-subject",
     required=True,
@@ -222,6 +223,42 @@ policy = {
         },
     ],
 }
+if a.public_web:
+    policy["Statement"].extend([
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:" + action for action in (
+                "AuthorizeSecurityGroupIngress", "RevokeSecurityGroupIngress",
+                "CreateNetworkInterface", "DeleteNetworkInterface", "ModifyNetworkInterfaceAttribute",
+            )],
+            "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": region}},
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["servicediscovery:" + action for action in (
+                "CreateHttpNamespace", "GetNamespace", "DeleteNamespace", "GetOperation",
+                "CreateService", "GetService", "UpdateService", "DeleteService",
+                "RegisterInstance", "GetInstance", "DeregisterInstance", "DiscoverInstances",
+                "ListTagsForResource", "TagResource", "UntagResource",
+            )],
+            "Resource": "*",
+            "Condition": {"StringEquals": {"aws:RequestedRegion": region}},
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"],
+            "Resource": [f"arn:aws:apigateway:{region}::/{path}*" for path in ("apis", "vpclinks", "tags")],
+        },
+        {
+            "Effect": "Allow",
+            "Action": "iam:CreateServiceLinkedRole",
+            "Resource": "arn:aws:iam::*:role/aws-service-role/*",
+            "Condition": {"StringEquals": {"iam:AWSServiceName": [
+                "ops.apigateway.amazonaws.com",
+            ]}},
+        },
+    ])
 iam.put_role_policy(
     RoleName="orion-india-github", PolicyName="orion-deploy", PolicyDocument=json.dumps(policy)
 )

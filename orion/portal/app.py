@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 import hmac
+from ipaddress import ip_address
 import json
 import os
 from pathlib import Path
@@ -121,7 +122,7 @@ class KotakVerify(Strict):
     totp: str = Field(pattern=r"^[0-9]{6}$")
 
 
-def create_app(root, key, origin):
+def create_app(root, key, origin, *, trust_local_proxy=False):
     parsed = urlsplit(origin)
     if parsed.path or parsed.query or parsed.fragment or parsed.username:
         raise ValueError("Origin must contain only scheme, host and optional port")
@@ -160,6 +161,18 @@ def create_app(root, key, origin):
     app.state.accounts = accounts
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[parsed.hostname])
 
+    def visitor_ip(request):
+        if not trust_local_proxy:
+            return request.client.host
+        # Public ingress: API Gateway overwrites this header, nginx normalizes it,
+        # and only the loopback proxy may supply it. Never trust arbitrary XFF.
+        try:
+            if not ip_address(request.client.host).is_loopback:
+                raise ValueError("Untrusted peer")
+            return str(ip_address(request.headers.get("x-orion-viewer-ip", "")))
+        except ValueError:
+            raise HTTPException(403, "Trusted proxy required") from None
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         return JSONResponse({"detail": "Invalid fields or values; check the form."}, status_code=422)
@@ -189,6 +202,9 @@ def create_app(root, key, origin):
                 "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
             }
         )
+        if parsed.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         return response
 
     def identity(request, mutation=False, approved=True):
@@ -219,7 +235,7 @@ def create_app(root, key, origin):
     @app.post("/api/register", status_code=201)
     def register(body: Register, request: Request):
         try:
-            store.register(body.username, body.password, defaults(), request.client.host)
+            store.register(body.username, body.password, defaults(), visitor_ip(request))
         except ValueError as exc:
             raise HTTPException(429 if str(exc) == "Try again later" else 400, str(exc)) from None
         return {"ok": True, "mode": "paper"}
@@ -228,7 +244,7 @@ def create_app(root, key, origin):
     def mobile_login(body: Login, request: Request):
         # No cookies issued. Native bearer sessions cannot authenticate the browser surface.
         try:
-            token, _ = store.login(body.username, body.password, request.client.host, client="mobile")
+            token, _ = store.login(body.username, body.password, visitor_ip(request), client="mobile")
         except ValueError as exc:
             raise HTTPException(429 if str(exc) == "Try again later" else 401, str(exc)) from None
         return {"token": token, "expires_in": 28800, "mode": "paper"}
@@ -236,7 +252,7 @@ def create_app(root, key, origin):
     @app.post("/api/login")
     def login(body: Login, request: Request):
         try:
-            token, csrf = store.login(body.username, body.password, request.client.host)
+            token, csrf = store.login(body.username, body.password, visitor_ip(request))
         except ValueError as exc:
             raise HTTPException(429 if str(exc) == "Try again later" else 401, str(exc)) from None
         response = JSONResponse({"csrf": csrf})
@@ -525,5 +541,6 @@ def factory():
     if key_path.stat().st_mode & 0o077:
         raise ValueError("Encryption key file must be owner-only")
     return create_app(
-        os.environ["ORION_PORTAL_DATA"], key_path.read_bytes().strip(), os.environ["ORION_PORTAL_ORIGIN"]
+        os.environ["ORION_PORTAL_DATA"], key_path.read_bytes().strip(), os.environ["ORION_PORTAL_ORIGIN"],
+        trust_local_proxy=os.environ.get("ORION_TRUST_LOCAL_PROXY") == "1",
     )

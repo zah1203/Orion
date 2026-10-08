@@ -89,9 +89,11 @@ if portal_active:
     import urllib.request
     from urllib.parse import urlsplit
     origin = "http://127.0.0.1:8000"
-    for line in Path("/etc/orion/portal.env").read_text().splitlines():
-        if line.startswith("ORION_PORTAL_ORIGIN="):
-            origin = line.split("=", 1)[1].strip().strip("\"' ")
+    for env_path in (Path("/etc/orion/portal.env"), Path("/etc/orion/public-web.env")):
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("ORION_PORTAL_ORIGIN="):
+                    origin = line.split("=", 1)[1].strip().strip("\"' ")
     health_request = urllib.request.Request("http://127.0.0.1:8000/", headers={"Host": urlsplit(origin).netloc})
     for attempt in range(30):
         try:
