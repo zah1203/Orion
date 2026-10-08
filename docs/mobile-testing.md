@@ -69,3 +69,13 @@ Before enabling phone notifications in a release:
 - On a separate paper test account, verify a missing session and a stopped worker create a warning, one push after debounce, and no additional push before the reminder interval. Verify recovery clears the incident, logout removes the registration, and revoked phone tokens are retired. Test with the app closed on a physical phone. Automated tests mock the provider; they do not demonstrate real phone delivery.
 
 Limits: this monitor cannot notify if the entire server is down, and it does not detect every silent quote-stream stall while the socket reports connected. A separate off-host availability monitor and market-session-aware stale-quote alerts are required before Live mode. Future Live mode must also verify broker-native protective orders, reconcile orders/positions after reconnect and remain blocked while connectivity is unverified. App alerts are not a substitute for those controls. Live remains disabled.
+
+## Interactive performance
+
+Home → Explore performance supports Today, This week, This month, All time and inclusive custom dates. Instrument selection applies to the period summary, chart, instrument table and trade breakdown. Tap a chart bar to inspect its P&L; chart grouping can be daily, weekly or monthly. Weeks start Monday and all ledger dates use Asia/Kolkata. Charts show the latest 60 buckets with an explicit label; summaries include the entire selected range. The panel refreshes every 30 seconds while the app is active. Owner → select user exposes the same filters for that account; ordinary users can only retrieve their own data.
+
+Realized P&L includes each entry/exit fee and partial realization on its actual ledger date. Cash top-ups are excluded. Current open P&L is shown separately, with stale or unavailable marks identified; it is not a historical period return. The existing account headline totals remain lifetime totals.
+
+New engine audit events record exact realized deltas and fee/date metadata without changing trade execution. Existing account-wide daily ledger totals remain usable. Some legacy cross-day instrument/trade splits are unavailable because older events lack fee/realization checkpoints; the dashboard does not guess or treat them as zero. A broader period containing the entire legacy segment can have an exact total. Historical trades are not rewritten.
+
+Validation: backend tests cover daily/weekly/monthly totals, India midnight, inclusive ranges, partial exits, fee deltas, cash adjustments, legacy records, stale/missing marks, and owner/account isolation. During pilot testing compare a same-day trade and an overnight partial exit with their audit records; check both Home and the selected user's Owner panel.

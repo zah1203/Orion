@@ -295,6 +295,24 @@ def create_app(root, key, origin):
         Attention(store).disable(uid,body.token)
         return {"ok":True}
 
+    def performance_result(uid, period, instrument, start, end, group_by):
+        try:
+            return accounts.performance(uid,period=period,instrument=instrument,start=start,end=end,group_by=group_by)
+        except ValueError as exc:
+            raise HTTPException(422,str(exc)) from None
+
+    @app.get("/api/performance")
+    def own_performance(request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day"):
+        uid=identity(request)["user_id"]
+        return performance_result(uid,period,instrument,start,end,group_by)
+
+    @app.get("/api/admin/users/{uid}/performance")
+    def user_performance(uid: str, request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day"):
+        owner(request)
+        if uid not in {u["id"] for u in store.users()}:
+            raise HTTPException(404,"User not found")
+        return performance_result(uid,period,instrument,start,end,group_by)
+
     @app.get("/api/activity")
     def own_activity(request: Request, before: int | None = None):
         from .analytics import activity

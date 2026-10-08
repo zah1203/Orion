@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import Performance from "../components/Performance";
 import { api, login, logout, register, restore } from "../lib/api";
 import {
   phoneAlertsSupported,
@@ -467,7 +468,11 @@ export default function App() {
                     label="← All users"
                     onPress={() => run(() => navigate("Owner"))}
                   />
+                  <Text style={s.note}>
+                    Account totals · since account started
+                  </Text>
                   <Metrics p={selected.pnl.totals} />
+                  <Performance key={selected.id} userId={selected.id} />
                   <Text style={s.note}>
                     {selected.access} ·{" "}
                     {selected.worker_online
@@ -540,6 +545,9 @@ export default function App() {
                     <Text style={s.text}>
                       Available cash {money(me.pnl.totals.cash)}
                     </Text>
+                    <Text style={s.note}>
+                      Account totals · since account started
+                    </Text>
                     <Metrics p={me.pnl.totals} />
                   </LinearGradient>
                   <Card title="Get ready to paper trade">
@@ -594,6 +602,7 @@ export default function App() {
                       monitored by the server.
                     </Text>
                   </Card>
+                  <Performance key={me.id} />
                   <Card title="Performance by channel">
                     {(me.pnl.channels || []).map((c: Obj) => (
                       <View key={c.channel_id} style={s.row}>
