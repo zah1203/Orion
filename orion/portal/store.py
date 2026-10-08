@@ -40,6 +40,19 @@ class Store:
             CREATE TABLE IF NOT EXISTS worker_health(user_id TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS worker_status(user_id TEXT PRIMARY KEY,at REAL NOT NULL);
             """)
+        # Serialize migration when portal and supervisor start together.
+        # Existing pilot access is retained; new registrations await approval.
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            cols = {r[1] for r in db.execute("PRAGMA table_info(users)")}
+            if "role" not in cols:
+                db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+            if "access" not in cols:
+                db.execute("ALTER TABLE users ADD COLUMN access TEXT NOT NULL DEFAULT 'approved'")
+            cols = {r[1] for r in db.execute("PRAGMA table_info(sessions)")}
+            if "client" not in cols:
+                db.execute("ALTER TABLE sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'web'")
+            db.execute("CREATE TABLE IF NOT EXISTS admin_audit(seq INTEGER PRIMARY KEY, at REAL NOT NULL, actor TEXT NOT NULL, subject TEXT NOT NULL, action TEXT NOT NULL)")
         # Fail startup on the wrong key instead of silently losing access to saved credentials.
         marker = self.root / "key-check"
         if marker.exists():
@@ -81,7 +94,7 @@ class Store:
     def password_hash(password, salt):
         return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 600_000).hex()
 
-    def create_user(self, username, password, settings):
+    def create_user(self, username, password, settings, access="approved"):
         username = username.strip().lower()
         if not re.fullmatch("[a-z0-9][a-z0-9_.-]{2,39}", username):
             raise ValueError("Username must be 3–40 letters, digits, dots, dashes or underscores")
@@ -91,22 +104,39 @@ class Store:
         salt = secrets.token_hex(16)
         with self.db() as db:
             db.execute(
-                "INSERT INTO users(id,username,salt,password,settings) VALUES(?,?,?,?,?)",
-                (uid, username, salt, self.password_hash(password, salt), json.dumps(settings)),
+                "INSERT INTO users(id,username,salt,password,settings,access) VALUES(?,?,?,?,?,?)",
+                (uid, username, salt, self.password_hash(password, salt), json.dumps(settings), access),
             )
         self.account_dir(uid)
         return uid
 
+    def register(self, username, password, settings, ip):
+        # Reserve an attempt before expensive password hashing, including failures.
+        bucket = "signup:" + hashlib.sha256(ip.encode()).hexdigest()
+        now = time.time()
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM attempts WHERE at<?", (now - 900,))
+            count = db.execute("SELECT count(*) FROM attempts WHERE bucket=?", (bucket,)).fetchone()[0]
+            if count >= 5:
+                raise ValueError("Try again later")
+            db.execute("INSERT INTO attempts VALUES(?,?)", (bucket, now))
+        try:
+            return self.create_user(username, password, settings, access="pending")
+        except sqlite3.IntegrityError:
+            raise ValueError("Unable to create account with that username") from None
+
     def user(self, uid):
         with self.db() as db:
-            row = db.execute("SELECT id,username,settings,enabled FROM users WHERE id=?", (uid,)).fetchone()
+            row = db.execute("SELECT id,username,settings,enabled,role,access FROM users WHERE id=?", (uid,)).fetchone()
         if not row:
             raise ValueError("Unknown account")
         return dict(
             id=row["id"],
             username=row["username"],
             settings=json.loads(row["settings"]),
-            enabled=bool(row["enabled"]),
+            enabled=bool(row["enabled"]) and row["access"] == "approved",
+            role=row["role"], access=row["access"],
         )
 
     def by_username(self, name):
@@ -116,7 +146,7 @@ class Store:
             raise ValueError("Unknown account")
         return row["id"]
 
-    def login(self, username, password, ip):
+    def login(self, username, password, ip, client="web"):
         username = username.strip().lower()
         now = time.time()
         buckets = [
@@ -140,15 +170,15 @@ class Store:
         with self.db() as db:
             db.execute("DELETE FROM sessions WHERE expires<?", (now,))
             db.execute(
-                "INSERT INTO sessions VALUES(?,?,?,?)",
-                (hashlib.sha256(token.encode()).hexdigest(), row["id"], csrf, now + 28800),
+                "INSERT INTO sessions(token,user_id,csrf,expires,client) VALUES(?,?,?,?,?)",
+                (hashlib.sha256(token.encode()).hexdigest(), row["id"], csrf, now + 28800, client),
             )
         return token, csrf
 
     def session(self, token):
         with self.db() as db:
             row = db.execute(
-                "SELECT user_id,csrf FROM sessions WHERE token=? AND expires>?",
+                "SELECT user_id,csrf,client FROM sessions WHERE token=? AND expires>?",
                 (hashlib.sha256(token.encode()).hexdigest(), time.time()),
             ).fetchone()
         return dict(row) if row else None
@@ -251,3 +281,39 @@ class Store:
                 )
             row = db.execute("SELECT body FROM worker_health WHERE user_id=?", (uid,)).fetchone()
         return json.loads(row[0]) if row else {}
+
+    def users(self):
+        with self.db() as db:
+            return [dict(r) for r in db.execute("SELECT id,username,role,access FROM users ORDER BY username")]
+
+    def bootstrap_owner(self, username):
+        uid = self.by_username(username)
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owner = db.execute("SELECT id FROM users WHERE role='owner'").fetchone()
+            if owner and owner[0] != uid:
+                raise ValueError("An owner already exists")
+            db.execute("UPDATE users SET role='owner',access='approved' WHERE id=?", (uid,))
+            db.execute("INSERT INTO admin_audit(at,actor,subject,action) VALUES(?,?,?,?)", (time.time(), "operator", uid, "owner_bootstrap"))
+
+    def set_access(self, actor, uid, access):
+        if access not in ("approved", "suspended", "pending"):
+            raise ValueError("Invalid access status")
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owner = db.execute("SELECT role,access FROM users WHERE id=?", (actor,)).fetchone()
+            target = db.execute("SELECT role FROM users WHERE id=?", (uid,)).fetchone()
+            if not owner or tuple(owner) != ("owner", "approved"):
+                raise ValueError("Owner access required")
+            if not target or target[0] == "owner":
+                raise ValueError("Cannot change owner access")
+            db.execute("UPDATE users SET access=?,enabled=0 WHERE id=?", (access, uid))
+            db.execute("INSERT INTO admin_audit(at,actor,subject,action) VALUES(?,?,?,?)", (time.time(), actor, uid, "access_" + access))
+
+    def audit_admin(self, actor, uid, action):
+        with self.db() as db:
+            db.execute("INSERT INTO admin_audit(at,actor,subject,action) VALUES(?,?,?,?)", (time.time(), actor, uid, action))
+
+    def admin_history(self):
+        with self.db() as db:
+            return [dict(r) for r in db.execute("SELECT at,actor,subject,action FROM admin_audit ORDER BY seq DESC LIMIT 200")]

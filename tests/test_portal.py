@@ -42,6 +42,27 @@ class PortalTests(unittest.TestCase):
     def post(self, path, body):
         return self.client.post(path, json=body, headers=self.headers)
 
+    def test_registration_isolated_paused_paper_account(self):
+        body = {"username": "new-user", "password": PASSWORD}
+        self.assertEqual(self.post("/api/register", body).status_code, 201)
+        uid = self.store.by_username("new-user")
+        user = self.store.user(uid)
+        self.assertFalse(user["enabled"])
+        self.assertEqual(user["settings"]["mode"], "paper")
+        self.assertEqual(user["settings"]["channels"], {})
+        self.assertEqual(self.store.credentials(uid), {})
+        self.assertNotEqual(uid, self.alice)
+        self.assertEqual(self.post("/api/register", body).status_code, 400)
+        self.assertEqual(self.client.get("/api/me").json()["username"], "alice")
+        self.assertEqual(self.post("/api/register", {**body, "user_id": self.bob}).status_code, 422)
+
+    def test_registration_throttle_and_origin(self):
+        body = {"username": "bad name", "password": PASSWORD}
+        self.assertEqual(self.client.post("/api/register", json=body).status_code, 403)
+        for _ in range(5):
+            self.assertEqual(self.post("/api/register", body).status_code, 400)
+        self.assertEqual(self.post("/api/register", body).status_code, 429)
+
     def test_login_cookie_and_csrf(self):
         r = self.client.get("/api/me")
         self.assertEqual(r.json()["username"], "alice")

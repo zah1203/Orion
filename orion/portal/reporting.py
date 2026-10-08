@@ -33,6 +33,9 @@ def report(state, max_age_seconds, now=None):
                 unrealized = value = None
         row = dict(
             signal_id=signal_id,
+            channel_id=signal_id.rsplit(":", 1)[0],
+            entry_time=p.get("entry_time"),
+            targets=p.get("targets", []),
             product=c["product"],
             symbol=c["symbol"],
             expiry=c["expiry"],

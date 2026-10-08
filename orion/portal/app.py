@@ -1,4 +1,4 @@
-"""Same-origin private pilot dashboard. Accounts are provisioned by an operator."""
+"""Same-origin private pilot dashboard. Isolated paper accounts with self-service registration."""
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
@@ -19,6 +19,7 @@ from .service import Accounts
 from .connections import Connections, ConnectionError, connection_lease
 
 STATIC = Path(__file__).parent / "static"
+MOBILE_WEB = Path(__file__).parent / "mobile_web"
 PRODUCTS = {"NIFTY", "BANKNIFTY", "GOLDM", "GOLD", "SILVERM", "SILVER", "CRUDEOIL", "CRUDEOILM"}
 
 
@@ -35,6 +36,10 @@ class Login(Strict):
     password: str = Field(min_length=1, max_length=128)
 
 
+class Register(Login):
+    password: str = Field(min_length=12, max_length=128)
+
+
 class Settings(Strict):
     paper_cash: float = Field(gt=0, le=100000000, allow_inf_nan=False)
     risk_per_trade: float = Field(gt=0, le=1000000, allow_inf_nan=False)
@@ -48,6 +53,34 @@ class Settings(Strict):
     products: list[
         Literal["NIFTY", "BANKNIFTY", "GOLDM", "GOLD", "SILVERM", "SILVER", "CRUDEOIL", "CRUDEOILM"]
     ] = Field(min_length=1, max_length=8)
+
+
+class Channel(Strict):
+    id: str = Field(pattern=r"^-100[0-9]{4,16}$")
+    name: str = Field(min_length=1, max_length=80)
+    products: list[Literal["NIFTY", "BANKNIFTY", "GOLDM", "GOLD", "SILVERM", "SILVER", "CRUDEOIL", "CRUDEOILM"]] = Field(min_length=1, max_length=8)
+    profile: Literal["index", "commodity"]
+
+
+class Channels(Strict):
+    channels: list[Channel] = Field(max_length=20)
+
+
+class Risk(Strict):
+    risk_per_trade: float = Field(gt=0, le=1000000, allow_inf_nan=False)
+    daily_loss_limit: float = Field(gt=0, le=10000000, allow_inf_nan=False)
+    max_open_risk: float = Field(gt=0, le=10000000, allow_inf_nan=False)
+    max_lots: int = Field(ge=1, le=100, strict=True)
+    max_open_positions: int = Field(ge=1, le=10, strict=True)
+    max_entries_per_day: int = Field(ge=1, le=100, strict=True)
+
+
+class Access(Strict):
+    access: Literal["approved", "suspended", "pending"]
+
+
+class Mode(Strict):
+    mode: Literal["paper", "live"]
 
 
 class Control(Strict):
@@ -130,7 +163,9 @@ def create_app(root, key, origin):
     @app.middleware("http")
     async def security(request, call_next):
         if request.method not in ("GET", "HEAD"):
-            if request.headers.get("origin") != origin:
+            native_login = request.url.path in ("/api/mobile/login", "/api/mobile/register") and not request.headers.get("origin")
+            bearer = request.headers.get("authorization", "").startswith("Bearer ") and not request.headers.get("origin")
+            if request.headers.get("origin") != origin and not native_login and not bearer:
                 return JSONResponse({"detail": "Origin rejected"}, status_code=403)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "JSON required"}, status_code=415)
@@ -147,22 +182,52 @@ def create_app(root, key, origin):
                 "X-Content-Type-Options": "nosniff",
                 "X-Frame-Options": "DENY",
                 "Referrer-Policy": "no-referrer",
-                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+                "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
             }
         )
         return response
 
-    def identity(request, mutation=False):
-        session = store.session(request.cookies.get("orion_session", ""))
-        if not session:
+    def identity(request, mutation=False, approved=True):
+        auth = request.headers.get("authorization", "")
+        native = auth.startswith("Bearer ")
+        token = auth[7:] if native else request.cookies.get("orion_session", "")
+        session = store.session(token)
+        if not session or session["client"] != ("mobile" if native else "web"):
             raise HTTPException(401, "Sign in required")
-        if mutation and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), session["csrf"]):
+        if mutation and not native and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), session["csrf"]):
             raise HTTPException(403, "Session verification failed")
+        user = store.user(session["user_id"])
+        if approved and user["access"] != "approved":
+            raise HTTPException(403, "Account " + user["access"] + "; owner approval required")
         return session
+
+    def owner(request, mutation=False):
+        session = identity(request, mutation)
+        if store.user(session["user_id"])["role"] != "owner":
+            raise HTTPException(403, "Owner access required")
+        return session["user_id"]
 
     @app.get("/")
     def home():
-        return FileResponse(STATIC / "index.html")
+        return FileResponse((MOBILE_WEB if (MOBILE_WEB / "index.html").exists() else STATIC) / "index.html")
+
+    @app.post("/api/mobile/register", status_code=201)
+    @app.post("/api/register", status_code=201)
+    def register(body: Register, request: Request):
+        try:
+            store.register(body.username, body.password, defaults(), request.client.host)
+        except ValueError as exc:
+            raise HTTPException(429 if str(exc) == "Try again later" else 400, str(exc)) from None
+        return {"ok": True, "mode": "paper"}
+
+    @app.post("/api/mobile/login")
+    def mobile_login(body: Login, request: Request):
+        # No cookies issued. Native bearer sessions cannot authenticate the browser surface.
+        try:
+            token, _ = store.login(body.username, body.password, request.client.host, client="mobile")
+        except ValueError as exc:
+            raise HTTPException(429 if str(exc) == "Try again later" else 401, str(exc)) from None
+        return {"token": token, "expires_in": 28800, "mode": "paper"}
 
     @app.post("/api/login")
     def login(body: Login, request: Request):
@@ -184,17 +249,113 @@ def create_app(root, key, origin):
 
     @app.post("/api/logout")
     def logout(request: Request):
-        session = identity(request, True)
+        session = identity(request, True, approved=False)
         connections.cancel(session["user_id"])
-        store.logout(request.cookies["orion_session"])
+        store.logout(request.headers.get("authorization", "")[7:] or request.cookies.get("orion_session", ""))
         response = JSONResponse({"ok": True})
         response.delete_cookie("orion_session", path="/")
         return response
 
     @app.get("/api/me")
     def me(request: Request):
-        session = identity(request)
-        return {**accounts.summary(session["user_id"]), "csrf": session["csrf"]}
+        session = identity(request, approved=False)
+        return {**accounts.summary(session["user_id"]), "csrf": session["csrf"], "live_available": False}
+
+    @app.get("/api/activity")
+    def own_activity(request: Request, before: int | None = None):
+        from .analytics import activity
+        uid = identity(request, approved=False)["user_id"]
+        return activity(store.account_dir(uid) / "paper.db", before)
+
+    @app.get("/api/admin/users/{uid}/activity")
+    def user_activity(uid: str, request: Request, before: int | None = None):
+        from .analytics import activity
+        owner(request)
+        if uid not in {u["id"] for u in store.users()}:
+            raise HTTPException(404, "User not found")
+        return activity(store.account_dir(uid) / "paper.db", before)
+
+    @app.put("/api/mode")
+    def mode(body: Mode, request: Request):
+        identity(request, True)
+        if body.mode != "paper":
+            raise HTTPException(409, "Live trading is unavailable in this release")
+        return {"mode": "paper", "live_available": False}
+
+    @app.get("/api/admin/users")
+    def admin_users(request: Request):
+        owner(request)
+        result = []
+        for user in store.users():
+            summary = accounts.summary(user["id"])
+            result.append({**user, "enabled": summary["enabled"], "worker_online": summary["worker_online"],
+                           "worker_health": summary["worker_health"], "pnl": summary["pnl"]["totals"]})
+        return {"users": result, "mode": "paper", "audit": store.admin_history()}
+
+    @app.get("/api/admin/users/{uid}")
+    def admin_user(uid: str, request: Request):
+        owner(request)
+        if uid not in {u["id"] for u in store.users()}:
+            raise HTTPException(404, "User not found")
+        summary = accounts.summary(uid)
+        summary.pop("credentials", None)
+        return summary
+
+    @app.put("/api/admin/users/{uid}/access")
+    def admin_access(uid: str, body: Access, request: Request):
+        actor = owner(request, True)
+        if uid not in {u["id"] for u in store.users()}:
+            raise HTTPException(404, "User not found")
+        try:
+            with store.lock(uid):
+                store.set_access(actor, uid, body.access)
+            accounts.set_enabled(uid, False)
+            connections.cancel(uid)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"ok": True}
+
+    @app.post("/api/admin/users/{uid}/pause")
+    def admin_pause(uid: str, request: Request):
+        actor = owner(request, True)
+        if uid not in {u["id"] for u in store.users()}:
+            raise HTTPException(404, "User not found")
+        accounts.set_enabled(uid, False)
+        store.audit_admin(actor, uid, "pause_entries")
+        return {"ok": True}
+
+    @app.put("/api/channels")
+    def channels(body: Channels, request: Request):
+        uid = identity(request, True)["user_id"]
+        cfg = store.user(uid)["settings"]
+        cfg["channels"] = {}
+        for channel in body.channels:
+            if channel.id in cfg["channels"]:
+                raise HTTPException(422, "Choose each channel once")
+            allowed = {"NIFTY", "BANKNIFTY"} if channel.profile == "index" else PRODUCTS - {"NIFTY", "BANKNIFTY"}
+            if not set(channel.products) <= allowed:
+                raise HTTPException(422, "Instruments must match the channel profile")
+            cfg["channels"][channel.id] = {"name": channel.name, "profile": channel.profile,
+                "products": sorted(set(channel.products)), "allow_overnight": True,
+                "exit_time_ist": "15:15" if channel.profile == "index" else "22:45"}
+        try:
+            accounts.save_settings(uid, cfg)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"ok": True}
+
+    @app.put("/api/risk")
+    def risk(body: Risk, request: Request):
+        uid = identity(request, True)["user_id"]
+        if body.risk_per_trade > body.max_open_risk:
+            raise HTTPException(422, "Per-trade risk must fit total open risk")
+        cfg = store.user(uid)["settings"]
+        cfg.update(body.model_dump())
+        try:
+            accounts.save_settings(uid, cfg)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"ok": True}
 
     @app.put("/api/settings")
     def settings(body: Settings, request: Request):
@@ -297,6 +458,11 @@ def create_app(root, key, origin):
     def demo(request: Request):
         uid = identity(request, True)["user_id"]
         return accounts.demo(uid)
+
+    if MOBILE_WEB.exists():
+        for folder in ("_expo", "assets"):
+            if (MOBILE_WEB / folder).exists():
+                app.mount("/" + folder, StaticFiles(directory=MOBILE_WEB / folder), name="mobile-" + folder)
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

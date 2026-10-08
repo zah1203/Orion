@@ -5,6 +5,7 @@ import json
 import sqlite3
 from ..core import Engine, dumps, stamp, dec
 from .reporting import report
+from .analytics import enrich
 
 
 class Accounts:
@@ -42,7 +43,7 @@ class Accounts:
                 "worker_health": self.store.health(uid),
                 "state": state,
                 "history": history,
-                "pnl": report(state, user["settings"]["quote_max_age_seconds"]),
+                "pnl": enrich(report(state, user["settings"]["quote_max_age_seconds"]), state, path, user["settings"].get("channels", {})),
                 "mode": "paper",
                 "ledger_started": path.exists(),
             }

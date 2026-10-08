@@ -1,4 +1,4 @@
-"""Run as root through SSM. Install release, preserve state, leave service stopped."""
+"""Run as root through SSM. Install release, preserve state, restore portal and supervise paper workers."""
 
 import argparse
 import hashlib
@@ -39,8 +39,12 @@ subprocess.run([python, "-m", "pip", "install", "-r", str(release / "requirement
 subprocess.run([python, "-m", "pip", "install", "--no-deps", str(release)], check=True)
 subprocess.run([python, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=release, check=True)
 # Only stop the old paper process after the new environment passes tests.
-# Stop all account services before switching source/venv. Leave them stopped
-# for explicit operator restart after catalogue/authentication review.
+portal_active = subprocess.run(["systemctl", "is-active", "--quiet", "orion-portal.service"]).returncode == 0
+# Capture previously enabled legacy workers so they cannot race the supervisor on boot.
+units = subprocess.run(["systemctl", "list-unit-files", "orion-worker@*.service", "--no-legend", "--no-pager"], capture_output=True, text=True, check=True).stdout
+legacy = [line.split()[0] for line in units.splitlines() if line.split() and re.fullmatch(r"orion-worker@[a-zA-Z0-9_.\\-]+\.service", line.split()[0])]
+subprocess.run(["systemctl", "stop", "orion-supervisor.service"], check=False)
+# Stop all account services before switching source/venv.
 subprocess.run(["systemctl", "stop", "orion-worker@*.service"], check=False)
 subprocess.run(["systemctl", "stop", "orion.service"], check=False)
 subprocess.run(["systemctl", "stop", "orion-portal.service"], check=False)
@@ -72,5 +76,29 @@ subprocess.run(
     ],
     check=True,
 )
+subprocess.run(["install", "-m", "644", str(release / "scripts/orion-supervisor.service"), "/etc/systemd/system/orion-supervisor.service"], check=True)
+for unit in legacy:
+    subprocess.run(["systemctl", "disable", unit], check=True)
 subprocess.run(["systemctl", "daemon-reload"], check=True)
-print("Release installed. Service remains stopped; configure and authenticate before starting.")
+if Path("/etc/orion/portal.env").exists() and Path("/etc/orion/portal.key").exists():
+    subprocess.run(["systemctl", "enable", "--now", "orion-supervisor.service"], check=True)
+if portal_active:
+    subprocess.run(["systemctl", "start", "orion-portal.service"], check=True)
+    import time
+    import urllib.request
+    from urllib.parse import urlsplit
+    origin = "http://127.0.0.1:8000"
+    for line in Path("/etc/orion/portal.env").read_text().splitlines():
+        if line.startswith("ORION_PORTAL_ORIGIN="):
+            origin = line.split("=", 1)[1].strip().strip("\"' ")
+    health_request = urllib.request.Request("http://127.0.0.1:8000/", headers={"Host": urlsplit(origin).netloc})
+    for attempt in range(30):
+        try:
+            with urllib.request.urlopen(health_request, timeout=2) as response:
+                if response.status == 200:
+                    break
+        except Exception:
+            time.sleep(1)
+    else:
+        raise SystemExit("Portal failed health check after deployment; inspect systemd logs")
+print("Release installed. Paper worker supervisor enabled; previously running portal restored.")
