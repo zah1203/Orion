@@ -7,7 +7,7 @@ import boto3
 
 p = argparse.ArgumentParser()
 p.add_argument("--prefix", required=True, help="Globally unique lowercase bucket prefix")
-p.add_argument("--public-web", action="store_true", help="Also grant deployment permissions for the optional API Gateway/private ALB")
+p.add_argument("--public-web", action="store_true", help="Also grant deployment permissions for the optional API Gateway/Cloud Map")
 p.add_argument(
     "--oidc-subject",
     required=True,
@@ -236,11 +236,11 @@ if a.public_web:
         },
         {
             "Effect": "Allow",
-            "Action": ["elasticloadbalancing:" + action for action in (
-                "Describe*", "CreateLoadBalancer", "DeleteLoadBalancer", "ModifyLoadBalancerAttributes",
-                "CreateTargetGroup", "DeleteTargetGroup", "ModifyTargetGroup", "ModifyTargetGroupAttributes",
-                "RegisterTargets", "DeregisterTargets", "CreateListener", "DeleteListener", "ModifyListener",
-                "SetSecurityGroups", "SetSubnets", "AddTags", "RemoveTags",
+            "Action": ["servicediscovery:" + action for action in (
+                "CreateHttpNamespace", "GetNamespace", "DeleteNamespace", "GetOperation",
+                "CreateService", "GetService", "UpdateService", "DeleteService",
+                "RegisterInstance", "GetInstance", "DeregisterInstance", "DiscoverInstances",
+                "ListTagsForResource", "TagResource", "UntagResource",
             )],
             "Resource": "*",
             "Condition": {"StringEquals": {"aws:RequestedRegion": region}},
@@ -255,7 +255,7 @@ if a.public_web:
             "Action": "iam:CreateServiceLinkedRole",
             "Resource": "arn:aws:iam::*:role/aws-service-role/*",
             "Condition": {"StringEquals": {"iam:AWSServiceName": [
-                "elasticloadbalancing.amazonaws.com", "ops.apigateway.amazonaws.com",
+                "ops.apigateway.amazonaws.com",
             ]}},
         },
     ])

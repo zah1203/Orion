@@ -125,7 +125,7 @@ def activate(origin, private_ip):
         subprocess.run(["systemctl", "restart" if was_active else "stop", "orion-portal"], check=False)
         subprocess.run(["systemctl", "reload", "nginx"], check=False)
         raise
-    print("Public proxy configured. Wait for ALB health checks, then verify:", origin)
+    print("Public proxy configured. Verify the private integration at:", origin)
     print("Workers were not restarted. Sign in as owner and test a pending account before sharing.")
 
 

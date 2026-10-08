@@ -7,14 +7,15 @@ release. The URL stays the same while the API resource is retained.
 
 ## Architecture and boundaries
 
-Browser HTTPS → API Gateway HTTP API → private VPC link → internal ALB → private
+Browser HTTPS → API Gateway HTTP API → private VPC link → private
 nginx port 8080 → loopback portal port 8000. The UI and API use the same origin.
-The private hops inside the VPC use HTTP; this is not end-to-end TLS. No public
+Cloud Map supplies the server's private IP and port through API-only discovery.
+The private hop inside the VPC uses HTTP; this is not end-to-end TLS. No public
 inbound EC2 port is opened. The EC2 instance, data, existing EIP/Kotak whitelist and
 paper workers stay in place. The two new subnets have only local routes, no NAT.
 
 The gateway overwrites the visitor IP header before forwarding. Nginx accepts that
-header only from the ALB subnets and overwrites it again for the portal. The portal
+header only from the VPC link subnets and overwrites it again for the portal. The portal
 trusts it only from loopback when explicitly configured. Arbitrary X-Forwarded-For
 headers cannot bypass application login/registration limits. The gateway has an
 aggregate throttle; nginx additionally limits each visitor to 10 requests/second
@@ -29,14 +30,19 @@ authentication material. System/service error logs still exist.
 
 ## Costs and operational limits
 
-This is **not free hosting**. New billable resources are one internal Application
-Load Balancer (hours and LCUs), API Gateway requests/data, and applicable data
-transfer. Existing EC2/EBS/IP costs continue. Review Mumbai pricing in the AWS
-calculator and set an AWS Budget before applying. No NAT gateway, public ALB IPv4,
-custom domain or certificate purchase is added.
+This is **not free hosting**. New charges are one registered Cloud Map
+resource ($0.10/month), Cloud Map discovery calls ($1 per million), HTTP API
+requests ($1.05 per million in Mumbai for the first tier), and applicable data
+transfer. There is no load balancer hourly/LCU charge. These are usage rates, not
+a monthly cost cap; discovery calls need not equal browser requests. Existing
+EC2/EBS/IP costs continue. Review current prices and set an AWS Budget before
+applying. No NAT gateway, Route 53 DNS hosted zone, custom domain or certificate
+purchase is added. AWS Budget alerts notify; they do not impose a hard spending cap.
 
-The backend is still one EC2 instance with SQLite; the ALB does not make the
-application highly available. Before inviting users, take and verify a private
+The backend is still one EC2 instance with SQLite, with no automatic failover or
+load-balancer health probing. Cloud Map registration is not a live health check:
+if the portal is down, requests fail until it recovers. Systemd continues to
+restart failed services. Monitor gateway errors and test the public endpoint. Before inviting users, take and verify a private
 backup of `/var/lib/orion/portal` and the encryption key separately. Plan automated
 backups/restore drills, monitoring and security updates for ongoing use. This
 change is not a penetration test or a production security certification.
@@ -55,7 +61,7 @@ Do not enable real orders to test this ingress.
    automatically. Activation refuses to proceed without an approved owner.
 3. An AWS administrator re-runs `bootstrap/create_backend.py` with the **same**
    prefix and exact main OIDC subject as the existing installation, plus
-   `--public-web`. This opts into deployment permissions for ALB, API Gateway,
+   `--public-web`. This opts into deployment permissions for Cloud Map, API Gateway,
    ingress rules and their service-linked roles. It does not grant runtime users
    infrastructure access. These permissions cover matching services in Mumbai,
    not exclusively individual Orion resource ARNs; restrict repository writers.
@@ -69,7 +75,7 @@ Do not enable real orders to test this ingress.
    paste this URL into its single input. The workflow validates the API belongs
    to this AWS account, is tagged Orion, and that the installed app matches main.
    It configures nginx, the HTTPS origin and trusted proxy, then restarts only the
-   portal. It leaves the worker/supervisor processes alone. Wait for ALB health.
+   portal. It leaves the worker/supervisor processes alone.
 7. Complete the checks below before sharing the URL. Until configuration finishes,
    the endpoint can return 503; this is not a ready-to-share state.
 
@@ -110,7 +116,7 @@ The original `/etc/orion/portal.env` is never overwritten by activation. Previou
 public configuration is backed up under `/var/backups/orion-public-web` and restored
 automatically if activation fails. Do not roll back database files to change URLs.
 
-Stopping nginx does not stop ALB charges. Removing the optional web infrastructure
+Stopping nginx does not remove the Cloud Map registration charge. Removing the optional web infrastructure
 requires a fresh reviewed Terraform plan with `PUBLIC_WEB_ENABLED=false`; it deletes
 the public API and its URL. Re-enabling later generates a different URL.
 
@@ -118,5 +124,13 @@ the public API and its URL. Re-enabling later generates a different URL.
 
 - [AWS HTTP API private integrations](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-private.html)
 - [HTTP API parameter mapping](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-parameter-mapping.html)
-- [ALB pricing](https://aws.amazon.com/elasticloadbalancing/pricing/)
+- [Cloud Map pricing](https://aws.amazon.com/cloud-map/pricing/)
 - [API Gateway pricing](https://aws.amazon.com/api-gateway/pricing/)
+
+## Adding a load balancer later
+
+Keep the same API Gateway resource and stage, create an internal ALB, then update
+the private integration target after testing. The public URL can stay unchanged.
+For multiple backend servers, first migrate the current SQLite/session/worker
+coordination to suitable shared state; adding a load balancer alone does not make
+the current single-host application safe to run across multiple instances.

@@ -28,90 +28,49 @@ resource "aws_security_group" "web_link" {
   vpc_id      = aws_vpc.orion.id
   description = "API Gateway VPC link; no inbound connections"
 }
-resource "aws_security_group" "web_alb" {
-  count       = var.public_web_enabled ? 1 : 0
-  name_prefix = "orion-web-alb-"
-  vpc_id      = aws_vpc.orion.id
-  description = "Internal ALB; API Gateway VPC link only"
-}
 resource "aws_security_group" "web_target" {
   count       = var.public_web_enabled ? 1 : 0
   name_prefix = "orion-web-target-"
   vpc_id      = aws_vpc.orion.id
-  description = "Private reverse proxy; internal ALB only"
+  description = "Private reverse proxy; API Gateway VPC link only"
 }
-resource "aws_security_group_rule" "link_to_alb" {
+resource "aws_security_group_rule" "link_to_target" {
   count                    = var.public_web_enabled ? 1 : 0
   type                     = "egress"
   security_group_id        = aws_security_group.web_link[0].id
-  source_security_group_id = aws_security_group.web_alb[0].id
-  from_port                = 80
-  to_port                  = 80
-  protocol                 = "tcp"
-}
-resource "aws_security_group_rule" "alb_from_link" {
-  count                    = var.public_web_enabled ? 1 : 0
-  type                     = "ingress"
-  security_group_id        = aws_security_group.web_alb[0].id
-  source_security_group_id = aws_security_group.web_link[0].id
-  from_port                = 80
-  to_port                  = 80
-  protocol                 = "tcp"
-}
-resource "aws_security_group_rule" "alb_to_target" {
-  count                    = var.public_web_enabled ? 1 : 0
-  type                     = "egress"
-  security_group_id        = aws_security_group.web_alb[0].id
   source_security_group_id = aws_security_group.web_target[0].id
   from_port                = 8080
   to_port                  = 8080
   protocol                 = "tcp"
 }
-resource "aws_security_group_rule" "target_from_alb" {
+resource "aws_security_group_rule" "target_from_link" {
   count                    = var.public_web_enabled ? 1 : 0
   type                     = "ingress"
   security_group_id        = aws_security_group.web_target[0].id
-  source_security_group_id = aws_security_group.web_alb[0].id
+  source_security_group_id = aws_security_group.web_link[0].id
   from_port                = 8080
   to_port                  = 8080
   protocol                 = "tcp"
 }
-resource "aws_lb" "web" {
-  count                      = var.public_web_enabled ? 1 : 0
-  name                       = "orion-web-private"
-  internal                   = true
-  load_balancer_type         = "application"
-  subnets                    = aws_subnet.web[*].id
-  security_groups            = [aws_security_group.web_alb[0].id]
-  drop_invalid_header_fields = true
-  desync_mitigation_mode     = "strictest"
-  depends_on                 = [aws_route_table_association.web]
+# API-only discovery: no load balancer, DNS hosted zone, NAT or public origin.
+resource "aws_service_discovery_http_namespace" "web" {
+  count       = var.public_web_enabled ? 1 : 0
+  name        = "orion-paper-web"
+  description = "Private Orion endpoint discovery for API Gateway"
 }
-resource "aws_lb_target_group" "web" {
-  count    = var.public_web_enabled ? 1 : 0
-  name     = "orion-web-portal"
-  port     = 8080
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.orion.id
-  health_check {
-    path    = "/_orion_health"
-    matcher = "200"
-  }
+resource "aws_service_discovery_service" "web" {
+  count        = var.public_web_enabled ? 1 : 0
+  name         = "portal"
+  namespace_id = aws_service_discovery_http_namespace.web[0].id
+  type         = "HTTP"
 }
-resource "aws_lb_target_group_attachment" "web" {
-  count            = var.public_web_enabled ? 1 : 0
-  target_group_arn = aws_lb_target_group.web[0].arn
-  target_id        = aws_instance.orion.id
-  port             = 8080
-}
-resource "aws_lb_listener" "web" {
-  count             = var.public_web_enabled ? 1 : 0
-  load_balancer_arn = aws_lb.web[0].arn
-  port              = 80
-  protocol          = "HTTP"
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.web[0].arn
+resource "aws_service_discovery_instance" "web" {
+  count       = var.public_web_enabled ? 1 : 0
+  instance_id = aws_instance.orion.id
+  service_id  = aws_service_discovery_service.web[0].id
+  attributes = {
+    AWS_INSTANCE_IPV4 = aws_instance.orion.private_ip
+    AWS_INSTANCE_PORT = "8080"
   }
 }
 resource "aws_apigatewayv2_vpc_link" "web" {
@@ -131,9 +90,10 @@ resource "aws_apigatewayv2_integration" "web" {
   api_id                 = aws_apigatewayv2_api.web[0].id
   integration_type       = "HTTP_PROXY"
   integration_method     = "ANY"
-  integration_uri        = aws_lb_listener.web[0].arn
+  integration_uri        = aws_service_discovery_service.web[0].arn
   connection_type        = "VPC_LINK"
   connection_id          = aws_apigatewayv2_vpc_link.web[0].id
+  depends_on             = [aws_service_discovery_instance.web]
   payload_format_version = "1.0"
   timeout_milliseconds   = 30000
   request_parameters = {
