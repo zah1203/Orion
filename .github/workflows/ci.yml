@@ -32,4 +32,6 @@ jobs:
           config = proxy_config('https://abcdefghij.execute-api.ap-south-1.amazonaws.com', '10.76.1.139')
           Path('/tmp/orion-nginx-check.conf').write_text('events {}\nhttp {\n' + config + '\n}\n')
           PY
+          # nginx -t also binds listeners; emulate the private interface on this disposable runner.
+          sudo ip address add 10.76.1.139/32 dev lo
           sudo nginx -t -c /tmp/orion-nginx-check.conf
