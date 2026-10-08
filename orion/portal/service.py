@@ -3,8 +3,10 @@
 from datetime import datetime, timezone
 import json
 import sqlite3
+from contextlib import closing
 from ..core import Engine, dumps, stamp, dec
 from .reporting import report
+from .analytics import enrich
 
 
 class Accounts:
@@ -42,10 +44,25 @@ class Accounts:
                 "worker_health": self.store.health(uid),
                 "state": state,
                 "history": history,
-                "pnl": report(state, user["settings"]["quote_max_age_seconds"]),
+                "pnl": enrich(report(state, user["settings"]["quote_max_age_seconds"]), state, path, user["settings"].get("channels", {})),
                 "mode": "paper",
                 "ledger_started": path.exists(),
             }
+
+    def performance(self, uid, **filters):
+        from .performance import performance
+        with self.store.lock(uid):
+            user=self.store.user(uid)
+            path=self.store.account_dir(uid)/"paper.db"
+            state={"cash":user["settings"]["paper_cash"],"positions":{},"days":{}}
+            records=[]
+            if path.exists():
+                with closing(sqlite3.connect(path)) as db:
+                    db.execute("BEGIN")
+                    row=db.execute("SELECT body FROM state WHERE id=1").fetchone()
+                    if row:state=json.loads(row[0])
+                    records=[dict(at=r[0],event=r[1],body=json.loads(r[2])) for r in db.execute("SELECT at,event,body FROM audit WHERE event IN ('PAPER_BUY','PAPER_EXIT','TARGET_REACHED') ORDER BY seq")]
+            return performance(state,records,user["settings"]["quote_max_age_seconds"],**filters)
 
     def active_positions(self, uid):
         path = self.store.account_dir(uid) / "paper.db"

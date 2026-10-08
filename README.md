@@ -88,3 +88,7 @@ Before reusing Telegram content for model training, verify the provider's rights
 Authenticated Telegram/Kotak tests, verified instrument metadata and feed timestamps, MCX API entitlements, chosen risk limits, and a real broker adapter with idempotent order reconciliation, partial-fill accounting, broker-held protective stops, stop-modification acknowledgements, restart recovery and expiry management. Paper stop movements are not broker stop orders.
 
 See [validation](docs/validation.md) and [source references](docs/sources.md).
+
+### Native paper app and owner workspace
+
+`mobile/` contains the Expo iOS/Android app and browser interface. New registrations require owner approval; the owner can review every user's paper P&L, positions and activity. Live trading is disabled on the server. See [deployment and device testing](docs/mobile-testing.md) for the one-time owner setup, automatic worker supervision, and remaining signed-device release gates.

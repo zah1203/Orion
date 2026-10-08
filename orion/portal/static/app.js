@@ -15,6 +15,7 @@ for(const product of instruments){const label=document.createElement('label'),in
 function fillSettings(settings){const form=$('#settings-form');for(const key of numericFields)form.elements[key].value=settings[key];form.elements.index_channel.value='';form.elements.commodity_channel.value='';const products=new Set();for(const [id,c] of Object.entries(settings.channels)){form.elements[c.name==='index-options'?'index_channel':'commodity_channel'].value=id;c.products.forEach(p=>products.add(p));}document.querySelectorAll('[name=product]').forEach(i=>i.checked=products.has(i.value));}
 async function refresh(fill=false){
  const data=await api('/api/me');current=data;csrf=data.csrf;$('#login-view').hidden=true;$('#dashboard').hidden=false;$('#logout').hidden=false;
+ if(data.access!=='approved'){$('#dashboard').hidden=true;notice('Account '+data.access+'. Owner approval is required.');return;}
  const health=data.worker_health||{};
  $('#worker-health').textContent=data.worker_online
  ? `Telegram: ${health.telegram||'legacy worker'} · Kotak: ${health.broker||'unknown'} · Catalogue: ${health.catalogue||'unknown'} · Refresh: ${health.catalogue_refresh||'awaiting status'}${health.catalogue_refreshed_at?' · Last validated: '+health.catalogue_refreshed_at:''} · Last message: ${health.last_message_at||'none this run'} · Last quote: ${health.last_quote_at||'none this run'}`
@@ -85,6 +86,10 @@ function resetConnections(){
 async function refreshConnections(){
  const d=await api('/api/connections');
  const fields=current.credentials.saved_fields;
+ $('#setup-telegram').textContent=d.telegram.linked?'Account linked':'Connect your Telegram account';
+ const channelCount=Object.keys(current.settings.channels||{}).length;
+ $('#setup-channels').textContent=channelCount?`${channelCount} channel profile(s) selected`:'Choose your channels';
+ $('#setup-broker').textContent=current.worker_health?.broker==='connected'?'Feed connected':d.kotak.checked_at?'Session saved · check feed status':'Connect your Kotak Neo account';
  $('#telegram-status').textContent=`${fields.includes('telegram_api_id')&&fields.includes('telegram_api_hash')?'API details saved.':'Save API ID and hash first.'} ${d.telegram.linked?'Authorized session saved.':'Not linked.'}${d.telegram.checked_at?' Last checked: '+new Date(d.telegram.checked_at*1000).toLocaleString():''}`;
  $('#kotak-status').textContent=d.kotak.checked_at?'Authentication verified at '+new Date(d.kotak.checked_at*1000).toLocaleString()+'. This is a past check, not an active worker connection.':(fields.some(k=>k.startsWith('kotak_'))?'Credentials saved; not validated.':'Save Kotak credentials first.');
  $('#telegram-code').hidden=d.telegram.step!=='code';
@@ -141,4 +146,13 @@ bind('#use-channels',async()=>{
 connectionForm('kotak-verify',async form=>{
  const totp=form.totp.value;form.totp.value='';notice('Checking Kotak authentication…');
  const d=await api('/api/connections/kotak/verify','POST',{totp});await refresh();notice(d.message);
+});
+
+$('#register-form').addEventListener('submit',async e=>{
+ e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');button.disabled=true;
+ try{await api('/api/register','POST',{username:form.username.value.trim(),password:form.password.value});
+ $('#login-form').username.value=form.username.value.trim();form.reset();
+ notice('Account created. Sign in to check your owner approval status.');
+ $('#login-form').password.focus();
+ }catch(err){notice(err.message,true);}finally{form.password.value='';button.disabled=false;}
 });

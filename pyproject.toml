@@ -16,4 +16,4 @@ include = ["orion*"]
 line-length = 110
 
 [tool.setuptools.package-data]
-"orion.portal" = ["defaults.json", "static/*"]
+"orion.portal" = ["defaults.json", "static/*", "mobile_web/*", "mobile_web/**/*"]

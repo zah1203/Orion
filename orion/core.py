@@ -453,7 +453,8 @@ class Engine:
                 s["cash"] = str(dec(s["cash"]) - ask * multiplier * lots - fee)
                 day["pnl"] = str(dec(day["pnl"]) - fee)
                 day["entries"] += 1
-                emit("PAPER_BUY", signal_id=key, lots=lots, price=str(ask), stop=p["stop"])
+                emit("PAPER_BUY", signal_id=key, lots=lots, price=str(ask), stop=p["stop"],
+                     pnl=p["pnl"], realized_delta=str(-fee), fee=str(fee), product=c["product"], pnl_date_ist=today)
                 continue
             if not e.get("market_open", False):
                 emit("MARKET_CLOSED_POSITION", signal_id=key)
@@ -461,6 +462,7 @@ class Engine:
             overnight_cutoff = p.get("overnight") and today > p.get("entry_date_ist", today) and cutoff
             regular_cutoff = not p.get("overnight") and cutoff
             if p.get("exit_requested") or expiry_cutoff or overnight_cutoff or regular_cutoff or bid <= dec(p["stop"]):
+                before_pnl = dec(p["pnl"])
                 self._sell(s, p, p["remaining"], bid, day)
                 emit(
                     "PAPER_EXIT",
@@ -473,13 +475,15 @@ class Engine:
                         else "STOP"
                     ),
                     price=str(bid),
-                    pnl=p["pnl"],
+                    pnl=p["pnl"], realized_delta=str(dec(p["pnl"])-before_pnl),
+                    fee=str(self.cfg["paper_fee_per_order"]), product=c["product"], pnl_date_ist=today,
                 )
                 continue
             for i, target in enumerate(p["targets"]):
                 if i < p["stage"] or bid < dec(target):
                     continue
                 amount = p["allocations"][i]
+                before_pnl = dec(p["pnl"])
                 if amount:
                     self._sell(s, p, amount, bid, day)
                 p["stage"] = i + 1
@@ -493,6 +497,8 @@ class Engine:
                     signal_id=key,
                     target=i + 1,
                     sold_lots=amount,
+                    pnl=p["pnl"], realized_delta=str(dec(p["pnl"])-before_pnl),
+                    fee=str(self.cfg["paper_fee_per_order"] if amount else 0), product=c["product"], pnl_date_ist=today,
                     remaining=p["remaining"],
                     stop=p["stop"],
                     price=str(bid),

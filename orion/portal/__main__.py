@@ -19,6 +19,8 @@ def main():
     sub = p.add_subparsers(dest="command", required=True)
     q = sub.add_parser("init-key")
     q.add_argument("--file", required=True)
+    q = sub.add_parser("bootstrap-owner")
+    q.add_argument("--username", required=True)
     q = sub.add_parser("create-user")
     q.add_argument("--username", required=True)
     q = sub.add_parser("reset-password")
@@ -43,6 +45,10 @@ def main():
     if key.stat().st_mode & 0o077:
         raise SystemExit("Key file must be owner-only")
     store = Store(os.environ["ORION_PORTAL_DATA"], key.read_bytes().strip())
+    if a.command == "bootstrap-owner":
+        store.bootstrap_owner(a.username)
+        print("Owner access configured for", a.username)
+        return
     if a.command in ("create-user", "reset-password"):
         password = getpass.getpass("Password (12–128 characters): ")
         if password != getpass.getpass("Repeat password: "):
@@ -61,6 +67,8 @@ def main():
                     (salt, store.password_hash(password, salt), uid),
                 )
                 db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+                db.execute("DELETE FROM push_outbox WHERE device IN (SELECT id FROM push_devices WHERE user_id=?)", (uid,))
+                db.execute("DELETE FROM push_devices WHERE user_id=?", (uid,))
             print("Password changed and browser sessions revoked.")
         return
     uid = store.by_username(a.username)
