@@ -72,7 +72,7 @@ resource "aws_instance" "orion" {
   ami                         = var.ami_id
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.orion.id
-  vpc_security_group_ids      = [aws_security_group.orion.id]
+  vpc_security_group_ids      = concat([aws_security_group.orion.id], aws_security_group.web_target[*].id)
   iam_instance_profile        = var.instance_profile_name
   associate_public_ip_address = true
   disable_api_termination     = true
