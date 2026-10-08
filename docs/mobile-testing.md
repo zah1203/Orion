@@ -79,3 +79,9 @@ Realized P&L includes each entry/exit fee and partial realization on its actual 
 New engine audit events record exact realized deltas and fee/date metadata without changing trade execution. Existing account-wide daily ledger totals remain usable. Some legacy cross-day instrument/trade splits are unavailable because older events lack fee/realization checkpoints; the dashboard does not guess or treat them as zero. A broader period containing the entire legacy segment can have an exact total. Historical trades are not rewritten.
 
 Validation: backend tests cover daily/weekly/monthly totals, India midnight, inclusive ranges, partial exits, fee deltas, cash adjustments, legacy records, stale/missing marks, and owner/account isolation. During pilot testing compare a same-day trade and an overnight partial exit with their audit records; check both Home and the selected user's Owner panel.
+
+## Reference-inspired mobile interface
+
+The navy/teal visual update uses real account data: the portfolio line plots cumulative realized P&L over recorded ledger days (not historical equity), connection cards report worker connection health, and open positions retain stale/unavailable marks. Channels show lifetime realized results and link to the matching filled trades. Signal activity remains available through Home/Channels “View all” and Trades “View signal activity”. Owner includes direct approval/decline actions, current user/worker counts, offline-worker attention cards and recent admin audit events. Declining an access request maps to suspended access; it does not delete the account. Live remains locked.
+
+Browser verification covers phone and desktop layouts, channel trade filtering, connection shortcuts, owner approval/decline and selected-user analytics. Signed-device verification is still required before mobile distribution.

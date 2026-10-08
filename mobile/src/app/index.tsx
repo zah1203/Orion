@@ -12,6 +12,14 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import {
+  Portfolio,
+  Connections,
+  OpenPreview,
+  ChannelResults,
+  RecentSignals,
+  OwnerSummary,
+} from "../components/Desk";
 import Performance from "../components/Performance";
 import { api, login, logout, register, restore } from "../lib/api";
 import {
@@ -154,6 +162,8 @@ export default function App() {
   const [username, setUsername] = useState(""),
     [password, setPassword] = useState(""),
     [signup, setSignup] = useState(false);
+  const [adminAudit, setAdminAudit] = useState<Obj[]>([]);
+  const [tradeChannel, setTradeChannel] = useState<string | null>(null);
   const [users, setUsers] = useState<Obj[]>([]),
     [selected, setSelected] = useState<Obj | null>(null),
     [events, setEvents] = useState<Obj[]>([]),
@@ -238,6 +248,7 @@ export default function App() {
     if (next === "Owner") {
       const d = await api("/admin/users");
       setUsers(d.users);
+      setAdminAudit(d.audit || []);
     }
     if (next === "Activity") {
       await loadActivity();
@@ -284,9 +295,14 @@ export default function App() {
       <View style={s.shell}>
         <View style={s.header}>
           <View>
-            <Text style={s.brand}>
-              O R I O N <Text style={s.tag}> / PAPER</Text>
-            </Text>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", gap: 9 }}
+            >
+              <Ionicons name="planet-outline" color="#70e5f2" size={29} />
+              <Text style={s.brand}>
+                ORION <Text style={s.tag}> / PAPER</Text>
+              </Text>
+            </View>
             <Text style={s.note}>Your signals. Measured.</Text>
           </View>
           {me && (
@@ -448,8 +464,12 @@ export default function App() {
                   {selected
                     ? selected.username
                     : tab === "Home"
-                      ? "Your trading desk"
-                      : tab}
+                      ? "Your overview"
+                      : tab === "Owner"
+                        ? "Owner dashboard"
+                        : tab === "Channels"
+                          ? "Your channels"
+                          : tab}
                 </Text>
                 <View style={s.mode}>
                   <Text style={s.tag}>● Paper</Text>
@@ -457,7 +477,7 @@ export default function App() {
                     accessibilityLabel="Live mode unavailable"
                     style={s.note}
                   >
-                    Live 🔒
+                    Live locked
                   </Text>
                 </View>
               </View>
@@ -534,48 +554,14 @@ export default function App() {
               ) : null}
               {!selected && tab === "Home" && (
                 <>
-                  <LinearGradient
-                    colors={["#163a46", "#102337"]}
-                    style={s.hero}
+                  <Portfolio me={me} />
+                  <Card
+                    title={
+                      me.enabled && me.worker_online
+                        ? "Paper bot online"
+                        : "Paper bot · " + (me.enabled ? "Waiting" : "Paused")
+                    }
                   >
-                    <Text style={s.eyebrow}>
-                      PAPER EQUITY · {me.pnl.totals.mark_status.toUpperCase()}
-                    </Text>
-                    <Text style={s.balance}>{money(me.pnl.totals.equity)}</Text>
-                    <Text style={s.text}>
-                      Available cash {money(me.pnl.totals.cash)}
-                    </Text>
-                    <Text style={s.note}>
-                      Account totals · since account started
-                    </Text>
-                    <Metrics p={me.pnl.totals} />
-                  </LinearGradient>
-                  <Card title="Get ready to paper trade">
-                    <Text style={s.text}>
-                      {me.credentials?.telegram_linked ? "✓" : "1."} Connect
-                      Telegram · {Object.keys(me.settings.channels).length}{" "}
-                      channels selected
-                    </Text>
-                    <Text style={s.text}>
-                      {me.credentials?.saved_fields?.includes(
-                        "kotak_consumer_key",
-                      )
-                        ? "✓"
-                        : "2."}{" "}
-                      Connect Kotak Neo for market data
-                    </Text>
-                    <Text style={s.note}>
-                      Set your virtual balance and risk limits in Account, then
-                      choose channels. Enabling entries starts the server worker
-                      when connections are ready.
-                    </Text>
-                    <Button
-                      muted
-                      label="Open account setup"
-                      onPress={() => run(() => navigate("Account"))}
-                    />
-                  </Card>
-                  <Card title="Your bot">
                     <Text style={s.text}>
                       {me.enabled ? "Entries enabled" : "Entries paused"} ·{" "}
                       {me.worker_online ? "Worker online" : "Worker offline"}
@@ -602,27 +588,70 @@ export default function App() {
                       monitored by the server.
                     </Text>
                   </Card>
+                  <Connections
+                    me={me}
+                    onPress={() => run(() => navigate("Account"))}
+                  />
+                  <OpenPreview
+                    me={me}
+                    onPress={() => {
+                      setTradeChannel(null);
+                      run(() => navigate("Trades"));
+                    }}
+                  />
                   <Performance key={me.id} />
-                  <Card title="Performance by channel">
-                    {(me.pnl.channels || []).map((c: Obj) => (
-                      <View key={c.channel_id} style={s.row}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={s.text}>{c.name || c.channel_id}</Text>
-                          <Text style={s.note}>
-                            {c.trades} trades · {c.wins} winning closes
-                          </Text>
-                        </View>
-                        <Text style={s.value}>{money(c.realized)}</Text>
-                      </View>
-                    ))}
-                    <Text style={s.note}>{me.pnl.note}</Text>
-                  </Card>
+                  <RecentSignals
+                    history={me.history || []}
+                    onPress={() => run(() => navigate("Activity"))}
+                  />
                 </>
               )}
-              {!selected && tab === "Trades" && <Positions data={me} />}
+              {!selected && tab === "Trades" && (
+                <>
+                  <Button
+                    muted
+                    label="View signal activity"
+                    onPress={() => run(() => navigate("Activity"))}
+                  />
+                  {tradeChannel && (
+                    <Button
+                      muted
+                      label="Show all channels"
+                      onPress={() => setTradeChannel(null)}
+                    />
+                  )}
+                  <Positions
+                    data={
+                      tradeChannel
+                        ? {
+                            ...me,
+                            pnl: {
+                              ...me.pnl,
+                              positions: me.pnl.positions.filter(
+                                (p: Obj) => p.channel_id === tradeChannel,
+                              ),
+                            },
+                          }
+                        : me
+                    }
+                  />
+                </>
+              )}
               {!selected && tab === "Channels" && (
                 <>
-                  <Card title="Connected channels">
+                  <ChannelResults
+                    me={me}
+                    onConnect={() => run(() => navigate("Account"))}
+                    onResults={(id) => {
+                      setTradeChannel(id);
+                      run(() => navigate("Trades"));
+                    }}
+                  />
+                  <RecentSignals
+                    history={me.history || []}
+                    onPress={() => run(() => navigate("Activity"))}
+                  />
+                  <Card title="Add & manage channels">
                     <Text style={s.note}>
                       Pause entries and finish open positions before changing
                       channels. Choose only channels your Telegram account can
@@ -995,17 +1024,50 @@ export default function App() {
               )}
               {!selected && tab === "Owner" && (
                 <>
-                  <Card title="Owner overview">
-                    <Text style={s.text}>
-                      {users.length} accounts ·{" "}
-                      {users.filter((u) => u.access === "pending").length}{" "}
-                      awaiting approval
-                    </Text>
-                    <Text style={s.note}>
-                      All amounts below are simulated. Each user has an isolated
-                      ledger and credentials.
-                    </Text>
+                  <OwnerSummary
+                    users={users}
+                    busy={busy}
+                    onUser={(id) =>
+                      run(async () => {
+                        setSelected(await api("/admin/users/" + id));
+                        setEvents([]);
+                      })
+                    }
+                    onAccess={(id, access) =>
+                      run(async () => {
+                        await api(
+                          "/admin/users/" + id + "/access",
+                          { access },
+                          "PUT",
+                        );
+                        const d = await api("/admin/users");
+                        setUsers(d.users);
+                        setAdminAudit(d.audit || []);
+                      })
+                    }
+                  />
+                  <Card title="Recent admin activity">
+                    {adminAudit.length === 0 && (
+                      <Text style={s.note}>
+                        No admin activity recorded yet.
+                      </Text>
+                    )}
+                    {adminAudit.slice(0, 5).map((e: Obj, i: number) => (
+                      <View key={i} style={{ gap: 5 }}>
+                        <Text style={s.text}>
+                          {(
+                            e.event ||
+                            e.action ||
+                            "Account updated"
+                          ).replaceAll("_", " ")}
+                        </Text>
+                        <Text style={s.note}>
+                          {new Date(Number(e.at) * 1000).toLocaleString()}
+                        </Text>
+                      </View>
+                    ))}
                   </Card>
+                  <Text style={s.cardTitle}>Users & paper performance</Text>
                   {users.map((u) => (
                     <Pressable
                       key={u.id}
@@ -1056,7 +1118,6 @@ export default function App() {
               "Home",
               "Channels",
               "Trades",
-              "Activity",
               "Account",
               ...(me.role === "owner" ? ["Owner"] : []),
             ].map((t, i) => (
@@ -1074,7 +1135,6 @@ export default function App() {
                         "grid-outline",
                         "radio-outline",
                         "swap-horizontal-outline",
-                        "pulse-outline",
                         "person-outline",
                         "shield-checkmark-outline",
                       ] as const
@@ -1095,8 +1155,8 @@ export default function App() {
   );
 }
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#07111f" },
-  shell: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center" },
+  safe: { flex: 1, backgroundColor: "#041323" },
+  shell: { flex: 1, width: "100%", maxWidth: 920, alignSelf: "center" },
   header: {
     padding: 22,
     flexDirection: "row",
@@ -1117,12 +1177,12 @@ const s = StyleSheet.create({
   },
   balance: { fontSize: 38, color: "#f1fffc", fontWeight: "700" },
   card: {
-    backgroundColor: "#101e30",
+    backgroundColor: "#10243b",
     borderRadius: 20,
     padding: 20,
     gap: 15,
     borderWidth: 1,
-    borderColor: "#213148",
+    borderColor: "#29435f",
   },
   cardTitle: { fontSize: 18, color: "#e6effa", fontWeight: "600" },
   text: { color: "#d1dfef", fontSize: 14, lineHeight: 22 },
@@ -1147,7 +1207,7 @@ const s = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
   },
-  muted: { backgroundColor: "#20334b" },
+  muted: { backgroundColor: "#122d47", borderWidth: 1, borderColor: "#446b91" },
   buttonText: { color: "#08251f", fontWeight: "700", fontSize: 13 },
   input: {
     backgroundColor: "#081423",
