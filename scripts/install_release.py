@@ -43,7 +43,7 @@ portal_active = subprocess.run(["systemctl", "is-active", "--quiet", "orion-port
 # Capture previously enabled legacy workers so they cannot race the supervisor on boot.
 units = subprocess.run(["systemctl", "list-unit-files", "orion-worker@*.service", "--no-legend", "--no-pager"], capture_output=True, text=True, check=True).stdout
 legacy = [line.split()[0] for line in units.splitlines() if line.split() and re.fullmatch(r"orion-worker@[a-zA-Z0-9_.\\-]+\.service", line.split()[0])]
-subprocess.run(["systemctl", "stop", "orion-supervisor.service"], check=False)
+subprocess.run(["systemctl", "stop", "orion-attention.service", "orion-supervisor.service"], check=False)
 # Stop all account services before switching source/venv.
 subprocess.run(["systemctl", "stop", "orion-worker@*.service"], check=False)
 subprocess.run(["systemctl", "stop", "orion.service"], check=False)
@@ -77,11 +77,12 @@ subprocess.run(
     check=True,
 )
 subprocess.run(["install", "-m", "644", str(release / "scripts/orion-supervisor.service"), "/etc/systemd/system/orion-supervisor.service"], check=True)
+subprocess.run(["install", "-m", "644", str(release / "scripts/orion-attention.service"), "/etc/systemd/system/orion-attention.service"], check=True)
 for unit in legacy:
     subprocess.run(["systemctl", "disable", unit], check=True)
 subprocess.run(["systemctl", "daemon-reload"], check=True)
 if Path("/etc/orion/portal.env").exists() and Path("/etc/orion/portal.key").exists():
-    subprocess.run(["systemctl", "enable", "--now", "orion-supervisor.service"], check=True)
+    subprocess.run(["systemctl", "enable", "--now", "orion-supervisor.service", "orion-attention.service"], check=True)
 if portal_active:
     subprocess.run(["systemctl", "start", "orion-portal.service"], check=True)
     import time

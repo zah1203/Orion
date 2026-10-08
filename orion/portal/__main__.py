@@ -67,6 +67,8 @@ def main():
                     (salt, store.password_hash(password, salt), uid),
                 )
                 db.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+                db.execute("DELETE FROM push_outbox WHERE device IN (SELECT id FROM push_devices WHERE user_id=?)", (uid,))
+                db.execute("DELETE FROM push_devices WHERE user_id=?", (uid,))
             print("Password changed and browser sessions revoked.")
         return
     uid = store.by_username(a.username)

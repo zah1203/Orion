@@ -83,6 +83,10 @@ class Mode(Strict):
     mode: Literal["paper", "live"]
 
 
+class PushDevice(Strict):
+    token: str = Field(pattern=r"^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{10,200}\]$")
+
+
 class Control(Strict):
     enabled: bool = Field(strict=True)
 
@@ -249,9 +253,14 @@ def create_app(root, key, origin):
 
     @app.post("/api/logout")
     def logout(request: Request):
-        session = identity(request, True, approved=False)
-        connections.cancel(session["user_id"])
-        store.logout(request.headers.get("authorization", "")[7:] or request.cookies.get("orion_session", ""))
+        token=request.headers.get("authorization", "")[7:] or request.cookies.get("orion_session", "")
+        if request.headers.get("authorization", "").startswith("Bearer ") and not store.session(token):
+            # Possession of an expired native token may revoke only its own device registration.
+            store.logout(token)
+        else:
+            session = identity(request, True, approved=False)
+            connections.cancel(session["user_id"])
+            store.logout(token)
         response = JSONResponse({"ok": True})
         response.delete_cookie("orion_session", path="/")
         return response
@@ -260,6 +269,31 @@ def create_app(root, key, origin):
     def me(request: Request):
         session = identity(request, approved=False)
         return {**accounts.summary(session["user_id"]), "csrf": session["csrf"], "live_available": False}
+
+    @app.get("/api/attention")
+    def attention_status(request: Request):
+        from .attention import Attention
+        uid=identity(request, approved=False)["user_id"]
+        return Attention(store).view(uid, owner=store.user(uid)["role"] == "owner")
+
+    @app.put("/api/push-device")
+    def register_device(body: PushDevice, request: Request):
+        from .attention import Attention
+        session=identity(request, True)
+        if session["client"] != "mobile":
+            raise HTTPException(403, "Use the installed mobile app to enable phone alerts")
+        try:
+            Attention(store).register(session["user_id"],body.token,request.headers["authorization"][7:])
+        except ValueError as exc:
+            raise HTTPException(409,str(exc)) from None
+        return {"ok":True}
+
+    @app.delete("/api/push-device")
+    def remove_device(body: PushDevice, request: Request):
+        from .attention import Attention
+        uid=identity(request, True, approved=False)["user_id"]
+        Attention(store).disable(uid,body.token)
+        return {"ok":True}
 
     @app.get("/api/activity")
     def own_activity(request: Request, before: int | None = None):

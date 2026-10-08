@@ -13,6 +13,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { api, login, logout, register, restore } from "../lib/api";
+import {
+  phoneAlertsSupported,
+  enablePhoneAlerts,
+  disablePhoneAlerts,
+  watchNotificationTap,
+} from "../lib/notifications";
 type Obj = Record<string, any>;
 const money = (n: unknown) =>
   n === null || n === undefined
@@ -155,11 +161,37 @@ export default function App() {
     [available, setAvailable] = useState<Obj[]>([]),
     [channels, setChannels] = useState<Obj[]>([]),
     [connection, setConnection] = useState<Obj>({});
+  const [attention, setAttention] = useState<Obj>({ incidents: [] });
+  useEffect(
+    () =>
+      watchNotificationTap(() => {
+        setTab("Account");
+        const version = generation.current;
+        api("/me")
+          .then((d) => {
+            if (version === generation.current) setForm({ ...d.settings });
+          })
+          .catch(() => {});
+        api("/connections")
+          .then((d) => {
+            if (version === generation.current) setConnection(d);
+          })
+          .catch(() => {});
+        setNotice(
+          "Check connection status below. Sign in again if your app session has expired.",
+        );
+      }),
+    [],
+  );
   const generation = useRef(0);
   async function refresh() {
     const version = generation.current;
     const d = await api("/me");
-    if (version === generation.current) setMe(d);
+    const alerts = await api("/attention");
+    if (version === generation.current) {
+      setMe(d);
+      setAttention(alerts);
+    }
     return d;
   }
   useEffect(() => {
@@ -262,6 +294,7 @@ export default function App() {
                 run(async () => {
                   generation.current += 1;
                   setMe(null);
+                  setAttention({ incidents: [] });
                   setSelected(null);
                   setForm({});
                   setPassword("");
@@ -300,6 +333,33 @@ export default function App() {
               <Text style={s.text}>{notice}</Text>
             </Card>
           )}
+          {me &&
+            attention.incidents.map((incident: Obj) => (
+              <View key={incident.user_id} style={s.alert}>
+                <Text style={s.cardTitle}>{incident.title}</Text>
+                <Text style={s.text}>{incident.message}</Text>
+                <Text style={s.note}>
+                  Since {new Date(incident.since * 1000).toLocaleString()}
+                  {incident.user_id !== me.id
+                    ? " · Another user account (see Owner)"
+                    : ""}
+                </Text>
+                <Button
+                  label={
+                    incident.user_id === me.id
+                      ? "Check Kotak connection"
+                      : "Open owner dashboard"
+                  }
+                  onPress={() =>
+                    run(() =>
+                      navigate(
+                        incident.user_id === me.id ? "Account" : "Owner",
+                      ),
+                    )
+                  }
+                />
+              </View>
+            ))}
           {!me ? (
             <>
               <LinearGradient colors={["#173750", "#0b192c"]} style={s.hero}>
@@ -686,6 +746,59 @@ export default function App() {
               )}
               {!selected && tab === "Account" && (
                 <>
+                  <Card title="Phone alerts">
+                    <Text style={s.text}>
+                      Get notified when Kotak needs authentication or your
+                      worker loses monitoring. Reminders repeat every 15 minutes
+                      while unresolved.
+                    </Text>
+                    <Text style={s.note}>
+                      {attention.registered_devices || 0} registered devices.
+                      Owner devices also receive alerts for other accounts.
+                      Notifications contain no trading balances or credentials.
+                    </Text>
+                    {attention.devices_with_errors > 0 && (
+                      <Text style={s.text}>
+                        Notification delivery needs checking. Re-enable alerts
+                        and check phone permissions.
+                      </Text>
+                    )}
+                    {phoneAlertsSupported ? (
+                      <>
+                        <Button
+                          label="Enable alerts on this phone"
+                          onPress={() =>
+                            run(async () => {
+                              await enablePhoneAlerts();
+                              await refresh();
+                              setNotice(
+                                "Device registered. Delivery still depends on phone permissions and push service availability.",
+                              );
+                            })
+                          }
+                        />
+                        <Button
+                          muted
+                          label="Disable alerts on this phone"
+                          onPress={() =>
+                            run(async () => {
+                              await disablePhoneAlerts();
+                              await refresh();
+                              setNotice(
+                                "Phone alerts disabled for this device",
+                              );
+                            })
+                          }
+                        />
+                      </>
+                    ) : (
+                      <Text style={s.note}>
+                        Install the signed mobile app to enable phone
+                        notifications. This browser shows attention warnings
+                        while open.
+                      </Text>
+                    )}
+                  </Card>
                   <Card title="Connections">
                     <Text style={s.note}>
                       Kotak Neo supported · Dhan coming later. Broker

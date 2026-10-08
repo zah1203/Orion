@@ -53,6 +53,9 @@ class Store:
             if "client" not in cols:
                 db.execute("ALTER TABLE sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'web'")
             db.execute("CREATE TABLE IF NOT EXISTS admin_audit(seq INTEGER PRIMARY KEY, at REAL NOT NULL, actor TEXT NOT NULL, subject TEXT NOT NULL, action TEXT NOT NULL)")
+        from .attention import setup
+        with self.db() as db:
+            setup(db)
         # Fail startup on the wrong key instead of silently losing access to saved credentials.
         marker = self.root / "key-check"
         if marker.exists():
@@ -185,7 +188,10 @@ class Store:
 
     def logout(self, token):
         with self.db() as db:
-            db.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(token.encode()).hexdigest(),))
+            digest=hashlib.sha256(token.encode()).hexdigest()
+            db.execute("DELETE FROM push_outbox WHERE device IN (SELECT id FROM push_devices WHERE session_hash=?)", (digest,))
+            db.execute("DELETE FROM push_devices WHERE session_hash=?", (digest,))
+            db.execute("DELETE FROM sessions WHERE token=?", (digest,))
 
     def credentials(self, uid):
         with self.db() as db:

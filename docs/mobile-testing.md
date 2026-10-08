@@ -55,3 +55,17 @@ EAS will require your Expo project/account and Apple signing setup/device regist
 ## Scope and remaining release gates
 
 This is an invite-approved paper pilot, not an App Store submission. Apple/Expo signing, secure mobile API access, physical-device verification and an end-to-end test with real Telegram/Kotak sessions remain release gates. Public onboarding also needs privacy/support/account-deletion flows before App Store distribution. Admin password reset remains an operator command in this pilot. No background monitoring runs on the phone: server workers must remain healthy.
+
+## Kotak attention alerts
+
+The new `orion-attention` service monitors worker health independently of the supervisor. It creates an in-app incident when an enabled account (or an account with open paper positions) has missing Kotak authentication, a disconnected/reconnecting feed, or an offline worker. The signed mobile app offers **Account → Phone alerts → Enable alerts on this phone**. Owners who opt in also receive generic alerts for other accounts, without names, balances or credentials in lock-screen messages.
+
+Missing-auth pushes debounce for 30 seconds; feed/offline pushes for 90 seconds, plus the monitor polling interval. Normal reconnects are not treated as confirmed credential expiry. Unresolved incidents repeat every 15 minutes and queued reminders are removed on recovery. Delivery uses an encrypted, per-device token, persisted queue, retry backoff and Expo receipts. A provider-accepted receipt does not prove that the person saw the message. Invalid devices are removed. Registration lasts 30 days; enable again to renew. Logging out removes devices tied to that login, including an expired native login. A password reset revokes all devices for the account.
+
+Before enabling phone notifications in a release:
+- Configure the EAS project ID plus APNs/FCM push credentials and allow notifications on the phone. This needs a rebuilt signed app; the browser displays incidents but does not send OS push notifications.
+- Allow outbound HTTPS from the alert service to `exp.host`. If enhanced push security is enabled in Expo, set `EXPO_ACCESS_TOKEN` in the protected server environment, never in the client bundle.
+- Check `sudo systemctl status orion-attention --no-pager`. The deployment installs and starts it alongside the supervisor.
+- On a separate paper test account, verify a missing session and a stopped worker create a warning, one push after debounce, and no additional push before the reminder interval. Verify recovery clears the incident, logout removes the registration, and revoked phone tokens are retired. Test with the app closed on a physical phone. Automated tests mock the provider; they do not demonstrate real phone delivery.
+
+Limits: this monitor cannot notify if the entire server is down, and it does not detect every silent quote-stream stall while the socket reports connected. A separate off-host availability monitor and market-session-aware stale-quote alerts are required before Live mode. Future Live mode must also verify broker-native protective orders, reconcile orders/positions after reconnect and remain blocked while connectivity is unverified. App alerts are not a substitute for those controls. Live remains disabled.
