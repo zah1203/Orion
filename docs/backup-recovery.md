@@ -1,5 +1,9 @@
 # Paper application backup and recovery
 
+**Preferred activation:** use [GitHub backup operations](github-backup-operations.md).
+No local Terraform or CloudShell installation is needed. The commands below remain
+operator reference material; do not mix manual setup with workflow activation.
+
 ## Scope and evidence
 
 This implements recovery tooling; it does **not** demonstrate that production has

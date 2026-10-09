@@ -1,0 +1,135 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "One-time Orion GitHub recovery permissions. No credentials or infrastructure creation. Review IAM capability before creating.",
+  "Parameters": {
+    "DeploymentRoleName": {
+      "Type": "String",
+      "Default": "orion-india-github"
+    },
+    "RuntimeRoleName": {
+      "Type": "String",
+      "Default": "orion-india-ec2"
+    },
+    "BackupBucketName": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"
+    }
+  },
+  "Resources": {
+    "RecoveryPermissions": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "orion-github-recovery",
+        "Roles": [
+          {
+            "Ref": "DeploymentRoleName"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DedicatedBackupBucket",
+              "Effect": "Allow",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:s3:::${BackupBucketName}"
+                },
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:s3:::${BackupBucketName}/*"
+                }
+              ]
+            },
+            {
+              "Sid": "RecoverySecretMetadataAndDrill",
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:CreateSecret",
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:UpdateSecret",
+                "secretsmanager:DeleteSecret",
+                "secretsmanager:RestoreSecret",
+                "secretsmanager:TagResource",
+                "secretsmanager:UntagResource",
+                "secretsmanager:GetResourcePolicy",
+                "secretsmanager:GetSecretValue"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:secretsmanager:ap-south-1:${AWS::AccountId}:secret:orion-india/recovery/*"
+              }
+            },
+            {
+              "Sid": "CreateTaggedEscrowKey",
+              "Effect": "Allow",
+              "Action": [
+                "kms:CreateKey",
+                "kms:TagResource"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringEquals": {
+                  "aws:RequestedRegion": "ap-south-1",
+                  "aws:RequestTag/Purpose": "orion-recovery"
+                }
+              }
+            },
+            {
+              "Sid": "ManageTaggedEscrowKey",
+              "Effect": "Allow",
+              "Action": [
+                "kms:DescribeKey",
+                "kms:GetKeyPolicy",
+                "kms:PutKeyPolicy",
+                "kms:ListResourceTags",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:EnableKeyRotation",
+                "kms:GetKeyRotationStatus",
+                "kms:UpdateKeyDescription",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion",
+                "kms:Decrypt"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:kms:ap-south-1:${AWS::AccountId}:key/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:ResourceTag/Purpose": "orion-recovery"
+                }
+              }
+            },
+            {
+              "Sid": "RuntimeBackupPolicies",
+              "Effect": "Allow",
+              "Action": [
+                "iam:GetRole",
+                "iam:ListRolePolicies",
+                "iam:GetRolePolicy",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${RuntimeRoleName}"
+              }
+            },
+            {
+              "Sid": "ConfirmedDetachedOrionVolumeCleanup",
+              "Effect": "Allow",
+              "Action": "ec2:DeleteVolume",
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:ec2:ap-south-1:${AWS::AccountId}:volume/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "ec2:ResourceTag/OrionRetained": "true"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

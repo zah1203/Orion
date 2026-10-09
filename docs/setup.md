@@ -137,3 +137,6 @@ For a code rollback, stop the service, point `/opt/orion/current` to a previousl
 See [Paper backup and recovery](backup-recovery.md) for online SQLite backups,
 separate key escrow, optional private S3 retention, and isolated restore drills.
 The tooling is opt-in: its presence does not prove a production backup exists.
+
+For GitHub-only provisioning, activation, restore drills and reviewed teardown,
+see [GitHub backup operations](github-backup-operations.md).

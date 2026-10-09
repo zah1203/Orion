@@ -15,6 +15,10 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+      - name: Exercise recovery in an isolated network namespace
+        run: |
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups \
+            env -i PATH="$PATH" "$(command -v python)" -m unittest discover -s tests -p test_recovery.py -v
       - run: python -m orion replay --config config/paper.json --master examples/instruments.synthetic.json --events examples/replay.jsonl --db /tmp/replay.db
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:

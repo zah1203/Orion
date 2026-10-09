@@ -1,0 +1,39 @@
+name: Prepare backup permissions
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: orion-cloud-changes
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+      BACKUP_BUCKET: ${{ vars.BACKUP_BUCKET }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Publish repository-owned permission template without applying it
+        run: |
+          python - <<'PY'
+          import os, subprocess
+          bucket = os.environ['ARTIFACT_BUCKET']
+          key = 'releases/bootstrap/' + os.environ['GITHUB_SHA'] + '/github-recovery-permissions.json'
+          subprocess.run(['aws', 's3', 'cp', 'bootstrap/github-recovery-permissions.json',
+                          's3://' + bucket + '/' + key, '--sse', 'AES256'], check=True)
+          url = 'https://' + bucket + '.s3.ap-south-1.amazonaws.com/' + key
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('## One-time administrative permission setup\n\n'
+                        'In AWS CloudFormation (Mumbai), create stack `orion-github-recovery-permissions` '
+                        'using this private S3 template URL:\n\n`' + url + '`\n\n'
+                        'BackupBucketName: `' + os.environ['BACKUP_BUCKET'] + '`\n\n'
+                        'Review the IAM policy and acknowledge IAM capability. This workflow has not applied it.\n')
+          PY

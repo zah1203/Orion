@@ -114,3 +114,28 @@ resource "aws_iam_role_policy" "backup_writer" {
   })
 }
 output "backup_bucket" { value = aws_s3_bucket.backup.id }
+
+# Containers only. Secret values are written on EC2, never through Terraform.
+resource "aws_kms_key" "escrow" {
+  description             = "Orion recovery key escrow"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  tags                    = { Purpose = "orion-recovery" }
+  lifecycle { prevent_destroy = true }
+}
+resource "aws_secretsmanager_secret" "portal_key" {
+  name                    = "orion-india/recovery/portal-key"
+  kms_key_id              = aws_kms_key.escrow.arn
+  recovery_window_in_days = 7
+  lifecycle { prevent_destroy = true }
+}
+resource "aws_secretsmanager_secret" "archive_key" {
+  name                    = "orion-india/recovery/archive-key"
+  kms_key_id              = aws_kms_key.escrow.arn
+  recovery_window_in_days = 7
+  lifecycle { prevent_destroy = true }
+}
+output "portal_key_secret" { value = aws_secretsmanager_secret.portal_key.arn }
+output "archive_key_secret" { value = aws_secretsmanager_secret.archive_key.arn }
+output "escrow_kms_key" { value = aws_kms_key.escrow.arn }
+output "runtime_role_name" { value = var.runtime_role_name }
