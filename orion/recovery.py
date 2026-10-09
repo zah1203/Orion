@@ -334,6 +334,11 @@ def restore(backup, destination, backup_key, portal_key, work_dir):
         # Reserve the final name exclusively. No existing directory may be merged or replaced.
         destination.mkdir(mode=0o700)
         try:
+            # Guard even an interrupted/partially extracted recovery before any DB exists.
+            (destination / "portal").mkdir(mode=0o700)
+            (destination / "portal/RECOVERY_ONLY").write_text(
+                "Offline recovery only. Do not run workers or network services.\n"
+            )
             manifest = unpack(temp / "payload.tar", destination)
             counts = inspect_state(destination, portal_key)
             if counts != manifest["counts"]:
@@ -346,7 +351,6 @@ def restore(backup, destination, backup_key, portal_key, work_dir):
                     db.execute("UPDATE users SET enabled=0,settings=? WHERE id=?", (json.dumps(cfg), uid))
                 for table in ("sessions", "broker_sessions", "worker_status", "worker_health", "push_outbox", "push_devices"):
                     db.execute(f"DELETE FROM {table}")
-            (destination / "portal/RECOVERY_ONLY").write_text("Offline recovery only. Do not run workers or network services.\n")
             report = {"verified_before_sanitizing": counts, "source_backup_sha256": sha(Path(backup)),
                       "paper_ledgers_unchanged": True, "network_started": False, "aws_verified": False}
             # Assert ledger bytes have not changed after restoring control metadata.
