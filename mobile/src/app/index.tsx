@@ -299,9 +299,7 @@ export default function App() {
               style={{ flexDirection: "row", alignItems: "center", gap: 9 }}
             >
               <Ionicons name="planet-outline" color="#70e5f2" size={29} />
-              <Text style={s.brand}>
-                ORION <Text style={s.tag}> / PAPER</Text>
-              </Text>
+              <Text style={s.brand}>ORION</Text>
             </View>
             <Text style={s.note}>Your signals. Measured.</Text>
           </View>
