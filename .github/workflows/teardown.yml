@@ -1,0 +1,117 @@
+name: Orion teardown
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        type: choice
+        options: [application, recovery]
+        default: application
+      action:
+        type: choice
+        options: [plan-destroy, destroy, cleanup-volumes]
+        default: plan-destroy
+      confirmation:
+        description: Exact phrase from docs/github-backup-operations.md
+        type: string
+        required: true
+      plan_key:
+        description: Reviewed destroy manifest key
+        type: string
+      plan_sha256:
+        description: Reviewed destroy plan SHA256
+        type: string
+      volume_receipt:
+        description: Only for cleanup-volumes - retained-volumes.json key from application teardown
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: orion-cloud-changes
+  cancel-in-progress: false
+jobs:
+  teardown:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ap-south-1
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+      INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+      TF_VAR_instance_profile_name: ${{ vars.INSTANCE_PROFILE }}
+      TF_VAR_secret_arn: ${{ vars.SECRET_ARN }}
+      TF_VAR_artifact_bucket: ${{ vars.ARTIFACT_BUCKET }}
+      TF_VAR_ami_id: ${{ vars.AMI_ID }}
+      TF_VAR_public_web_enabled: ${{ vars.PUBLIC_WEB_ENABLED || 'false' }}
+      TF_VAR_bucket_name: ${{ vars.BACKUP_BUCKET }}
+      TF_VAR_runtime_role_name: ${{ vars.INSTANCE_PROFILE }}
+      TF_IN_AUTOMATION: 'true'
+      LIFECYCLE_STACK: ${{ inputs.scope }}
+      LIFECYCLE_ACTION: ${{ inputs.action }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+      PLAN_KEY: ${{ inputs.plan_key }}
+      PLAN_SHA256: ${{ inputs.plan_sha256 }}
+      VOLUME_RECEIPT: ${{ inputs.volume_receipt }}
+      BACKUP_OUTPUTS: /tmp/orion-recovery-outputs.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Check action and exact confirmation before obtaining AWS credentials
+        run: |
+          python - <<'PYCODE'
+          import os
+          from scripts.cloud_plan import check_request
+          if os.environ['LIFECYCLE_ACTION'] == 'cleanup-volumes':
+              if os.environ['LIFECYCLE_STACK'] != 'application' or os.environ['CONFIRMATION'] != 'DELETE RETAINED ORION VOLUMES':
+                  raise SystemExit('Volume cleanup requires application scope and its exact confirmation')
+          else:
+              check_request(os.environ['LIFECYCLE_STACK'], os.environ['LIFECYCLE_ACTION'], os.environ['CONFIRMATION'])
+          PYCODE
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+          role-duration-seconds: 3600
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - name: Validate exact reviewed destroy plan before side effects
+        if: inputs.action == 'destroy'
+        run: python scripts/cloud_plan.py
+        env:
+          LIFECYCLE_ACTION: check-destroy
+      - name: Read recovery stack metadata
+        if: inputs.action == 'destroy'
+        run: python scripts/cloud_plan.py
+        env:
+          LIFECYCLE_STACK: recovery
+          LIFECYCLE_ACTION: outputs
+          OUTPUT_FILE: /tmp/orion-recovery-outputs.json
+      - name: Final fresh backup and isolated restore before destroying application
+        if: inputs.action == 'destroy' && inputs.scope == 'application'
+        run: python -m scripts.backup_operations
+        env:
+          BACKUP_ACTION: backup-drill
+      - name: Disable only backup scheduling before recovery purge
+        if: inputs.action == 'destroy' && inputs.scope == 'recovery'
+        run: python -m scripts.backup_operations
+        env:
+          BACKUP_ACTION: disable
+      - name: Refresh short-lived AWS session after recovery check
+        if: inputs.action == 'destroy'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+          role-duration-seconds: 3600
+      - name: Plan or execute reviewed teardown
+        if: inputs.action != 'cleanup-volumes'
+        run: python scripts/cloud_plan.py
+      - name: Optional permanent deletion of recorded detached root volumes
+        if: inputs.action == 'cleanup-volumes' && inputs.scope == 'application'
+        run: python scripts/cleanup_retained_volumes.py
