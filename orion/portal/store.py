@@ -26,6 +26,8 @@ SECRET_FIELDS = {
 class Store:
     def __init__(self, root, key):
         self.root = Path(root).resolve()
+        if (self.root / "RECOVERY_ONLY").exists():
+            raise ValueError("Offline recovery copy: services and workers are forbidden")
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.cipher = Fernet(key)
         with self.db() as db:

@@ -27,3 +27,7 @@ portal-data/
 accounts.db*
 
 orion/portal/mobile_web/
+
+# Private encrypted recovery archives must never enter source control.
+*.orb
+*.orb.partial

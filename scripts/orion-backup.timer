@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Orion encrypted paper backup (opt-in)
+
+[Timer]
+OnCalendar=*-*-* 21:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=orion-backup.service
+
+[Install]
+WantedBy=timers.target

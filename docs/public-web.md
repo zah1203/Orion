@@ -134,3 +134,9 @@ the private integration target after testing. The public URL can stay unchanged.
 For multiple backend servers, first migrate the current SQLite/session/worker
 coordination to suitable shared state; adding a load balancer alone does not make
 the current single-host application safe to run across multiple instances.
+
+## Application recovery
+
+See [Paper backup and recovery](backup-recovery.md) for online SQLite backups,
+separate key escrow, optional private S3 retention, and isolated restore drills.
+The tooling is opt-in: its presence does not prove a production backup exists.
