@@ -22,6 +22,9 @@ jobs:
       - run: terraform -chdir=infra fmt -check
       - run: terraform -chdir=infra init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra validate
+      - run: terraform -chdir=infra/backup fmt -check
+      - run: terraform -chdir=infra/backup init -backend=false -lockfile=readonly
+      - run: terraform -chdir=infra/backup validate
       - name: Validate public reverse proxy configuration
         run: |
           sudo apt-get update

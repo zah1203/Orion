@@ -131,3 +131,9 @@ Application state is `/var/lib/orion/runtime/paper.db`; this is separate from Te
 EC2 user-data changes can require instance replacement, which `prevent_destroy` blocks. Preserve application state/session and review any replacement explicitly. Terraform state locking does not back up application positions. Do not reset the database merely to fix connectivity.
 
 For a code rollback, stop the service, point `/opt/orion/current` to a previously tested release, restore its service file, run daemon-reload, and start with fresh authentication. Only roll back when its state schema is compatible; otherwise restore a verified application backup. Do not roll back broker state based on this simulator.
+
+## Application recovery
+
+See [Paper backup and recovery](backup-recovery.md) for online SQLite backups,
+separate key escrow, optional private S3 retention, and isolated restore drills.
+The tooling is opt-in: its presence does not prove a production backup exists.

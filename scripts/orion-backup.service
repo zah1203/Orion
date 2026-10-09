@@ -1,0 +1,26 @@
+[Unit]
+Description=Orion encrypted online paper backup (opt-in)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/orion/backup.env
+ConditionPathExists=/etc/orion/recovery.key
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/orion/current
+EnvironmentFile=/etc/orion/backup.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/orion/current/.venv/bin/python -m orion.recovery backup --backup-key-file /etc/orion/recovery.key --portal-key-file /etc/orion/portal.key --output /var/backups/orion/encrypted --work-dir /var/backups/orion/work --bucket ${ORION_BACKUP_BUCKET} --remove-local-after-upload
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/orion
+# SQLite read-only online backup may require existing writable WAL shared-memory
+# sidecars. Grant only the data directories; the tool never issues source writes.
+ReadWritePaths=/var/lib/orion/portal /var/lib/orion/runtime /var/lib/orion
