@@ -76,6 +76,7 @@ class Ledger:
         self.account = account
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS metadata(account TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS live_incidents(code TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS intents(
                 tag TEXT PRIMARY KEY, event TEXT UNIQUE NOT NULL, body TEXT NOT NULL,
@@ -108,9 +109,17 @@ class Ledger:
         # Only closes the entry gate. No liquidation or order cancellations.
         self.db.execute("UPDATE control SET paused=1 WHERE id=1")
 
+    def _check_incidents(self):
+        if self.db.execute("SELECT 1 FROM live_incidents LIMIT 1").fetchone():
+            raise Refused("Live incident requires review")
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='protective_exits'").fetchone():
+            if self.db.execute("SELECT 1 FROM intents i WHERE i.filled > (SELECT COALESCE(SUM(e.filled),0) FROM protective_exits e WHERE e.entry_tag=i.tag)").fetchone():
+                raise Refused("Exposure requires protection review")
+
     def development_resume(self):
         """Offline test harness only; no API route or production worker calls this."""
         with self.transaction():
+            self._check_incidents()
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():
                 raise Refused("Reconciliation required")
             self.db.execute("UPDATE control SET paused=0 WHERE id=1")
@@ -151,6 +160,7 @@ class Ledger:
                 if prior["body"] != encoded:
                     raise Refused("Duplicate event changed")
                 return dict(prior)
+            self._check_incidents()
             if self.db.execute("SELECT paused FROM control WHERE id=1").fetchone()[0]:
                 raise Refused("Entries paused")
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():
@@ -180,6 +190,7 @@ class Ledger:
         itself sends nothing; restart leaves DISPATCHING blocking new entries.
         """
         with self.transaction():
+            self._check_incidents()
             if self.db.execute("SELECT paused FROM control WHERE id=1").fetchone()[0]:
                 raise Refused("Entries paused")
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():
