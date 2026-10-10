@@ -343,6 +343,25 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
             raise HTTPException(404, "User not found")
         return activity(store.account_dir(uid) / "paper.db", before)
 
+    @app.get("/api/live/readiness")
+    def live_readiness(request: Request):
+        owner(request)
+        # Deliberately no broker calls, state initialization or live-mode mutation.
+        return {
+            "stage": "offline-foundation", "live_available": False,
+            "order_submission_available": False, "pilot_scope": "owner-only",
+            "blockers": [
+                "broker-trading-session-and-identity",
+                "broker-response-normalization-and-position-reconciliation",
+                "protective-exits-and-partial-fill-handling",
+                "broker-verified-capital-fees-and-daily-risk",
+                "static-egress-and-broker-api-approval",
+                "live-ledger-backup-and-restore",
+                "owner-confirmation-and-deployment-gate",
+                "supervised-minimum-size-live-validation",
+            ],
+        }
+
     @app.put("/api/mode")
     def mode(body: Mode, request: Request):
         identity(request, True)
