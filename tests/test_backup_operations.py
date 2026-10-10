@@ -15,6 +15,23 @@ from scripts.cleanup_retained_volumes import validate_receipt
 
 
 class BackupOperationsTests(unittest.TestCase):
+    def test_bootstrap_allows_secret_kms_validation_with_scoped_data_key(self):
+        template = json.loads((Path(__file__).resolve().parents[1] /
+                               "bootstrap/github-recovery-permissions.json").read_text())
+        statements = template["Resources"]["RecoveryPermissions"]["Properties"]["PolicyDocument"]["Statement"]
+        for action in ("kms:GenerateDataKey", "kms:Decrypt"):
+            grants = [s for s in statements if action in s["Action"]]
+            self.assertTrue(grants, action + " required by Secrets Manager CreateSecret")
+            for grant in grants:
+                self.assertEqual(grant["Effect"], "Allow")
+                self.assertEqual(grant["Condition"]["StringEquals"]["aws:ResourceTag/Purpose"],
+                                 "orion-recovery")
+                self.assertEqual(grant["Resource"]["Fn::Sub"],
+                                 "arn:${AWS::Partition}:kms:ap-south-1:${AWS::AccountId}:key/*")
+        data_key = next(s for s in statements if "kms:GenerateDataKey" in s["Action"])
+        self.assertEqual(data_key["Condition"]["StringEquals"]["kms:ViaService"],
+                         "secretsmanager.ap-south-1.amazonaws.com")
+
     def config(self):
         return dict(backup_bucket="orion-test-backups", portal_key_secret="portal-arn",
                     archive_key_secret="archive-arn", escrow_kms_key="kms-arn", runtime_role_name="runtime")
