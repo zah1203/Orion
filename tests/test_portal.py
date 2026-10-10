@@ -54,6 +54,38 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(denied.status_code, 409)
         self.assertFalse(list(Path(self.tmp.name).rglob("live.db")))
 
+    def test_live_probe_requires_owner_csrf_and_explicit_confirmation(self):
+        from unittest.mock import AsyncMock, patch
+        body = {"totp": "123456", "confirmation": "READ ONLY CHECK"}
+        with patch("orion.live.probe.run_probe", new_callable=AsyncMock) as probe:
+            self.assertEqual(self.post("/api/live/probe", body).status_code, 403)
+            self.store.bootstrap_owner("alice")
+            self.assertEqual(self.client.post("/api/live/probe", json=body,
+                            headers={"Origin": ORIGIN}).status_code, 403)
+            self.assertEqual(self.post("/api/live/probe", {"totp":"123456"}).status_code, 422)
+            probe.assert_not_called()
+
+    def test_live_probe_preserves_credentials_and_blocks_running_worker(self):
+        import fcntl
+        from unittest.mock import AsyncMock, patch
+        self.store.bootstrap_owner("alice")
+        creds = dict(kotak_consumer_key="private-token", kotak_mobile="+910000000000",
+                     kotak_ucc="TEST1", kotak_mpin="private-pin")
+        self.store.save_credentials(self.alice, creds)
+        before = self.store.credentials(self.alice)
+        body = {"totp":"123456", "confirmation":"READ ONLY CHECK"}
+        with patch("orion.live.probe.run_probe", new_callable=AsyncMock,
+                   return_value={"live_available":False}) as probe:
+            with open(self.store.account_dir(self.alice) / "worker.lock", "a") as lease:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(self.post("/api/live/probe", body).status_code, 409)
+                probe.assert_not_called()
+            response = self.post("/api/live/probe", body)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.store.credentials(self.alice), before)
+            self.assertNotIn("private", response.text)
+            self.assertFalse(list(Path(self.tmp.name).rglob("live.db")))
+
     def test_registration_isolated_paused_paper_account(self):
         body = {"username": "new-user", "password": PASSWORD}
         self.assertEqual(self.post("/api/register", body).status_code, 201)
