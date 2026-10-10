@@ -179,6 +179,9 @@ class Accounting:
         day = now.astimezone(IST).date().isoformat()
         with self.ledger.transaction(), localcontext() as context:
             context.prec = 80
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
+                if self.db.execute("SELECT 1 FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone():
+                    raise Refused('Broker charges unverified; risk budget unavailable')
             fills = [dict(r) for r in self.db.execute('SELECT * FROM fill_history ORDER BY executed_at,trade_id')]
             orders = self._orders()
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():

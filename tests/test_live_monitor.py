@@ -186,3 +186,57 @@ class MonitorLeaseTests(unittest.TestCase):
             self.assertEqual(factory.call_count, 1)
             self.assertIsNone(first.ledger)
             self.assertEqual(paper.read_bytes(), b'synthetic-paper-untouched')
+
+class MonitorEvidenceTests(unittest.TestCase):
+    setUp = fixtures.CommandTests.setUp
+    tearDown = fixtures.CommandTests.tearDown
+    committed = fixtures.CommandTests.committed
+    start = MonitorTests.start
+    fill = MonitorTests.fill
+
+    def evidence(self):
+        from test_live_trades import trade
+        self.session.sdk.limits = lambda: dict(stat='Ok', stCode=200, Net='10000')
+        self.session.sdk.trade_report = lambda: report(*[
+            trade(self.now, fldQty=1, lotSz='1', flId='fill'+str(i))
+            for i in range(self.session.sdk.entry['fldQty'])])
+        original = self.session.request
+        self.session.request = lambda operation, **args: (self.session.adapter.evidence()
+            if operation == 'evidence' else original(operation, **args))
+        self.monitor.collect_trades = True
+
+    def test_real_adapter_evidence_and_monitor_protect_partial_without_extra_buy(self):
+        self.start()
+        self.evidence()
+        self.assertEqual(self.monitor.cycle()['action'], 'entry-cancel-requested')
+        self.assertEqual(self.monitor.cycle()['action'], 'protection-requested')
+        self.assertEqual(self.monitor.cycle()['uncovered'], 0)
+        self.assertEqual(self.ledger.db.execute('SELECT SUM(quantity) FROM fill_history').fetchone()[0], 4)
+        self.fill(6, 'cancelled')
+        self.assertEqual(self.monitor.cycle()['action'], 'protection-requested')
+        self.assertEqual(self.monitor.cycle()['uncovered'], 0)
+        self.assertEqual(self.ledger.db.execute('SELECT SUM(quantity) FROM fill_history').fetchone()[0], 6)
+        self.assertEqual(sum(r.get('transaction_type') == 'B' for r in self.session.sdk.calls), 1)
+        self.assertTrue(self.ledger.db.execute('SELECT paused FROM control').fetchone()[0])
+
+    def test_incomplete_fill_evidence_stops_monitor_before_command(self):
+        self.start()
+        self.evidence()
+        self.session.sdk.trade_report = lambda: report()
+        with self.assertRaises(Refused): self.monitor.cycle()
+        self.assertEqual(len(self.session.sdk.calls), 1)
+        self.assertEqual(self.ledger.get(self.tag)['status'], 'DISPATCHING')
+        self.assertEqual(self.monitor.health()['state'], 'review-required')
+
+    def test_cleanup_failure_does_not_keep_database_or_worker_lease(self):
+        account = AccountMonitor(None, 'a'*32, None)
+        lease = Mock()
+        ledger = Mock()
+        session = Mock()
+        session.close.side_effect = RuntimeError('synthetic cleanup failure')
+        account.lease, account.ledger, account.session = lease, ledger, session
+        with self.assertRaises(RuntimeError): account.__exit__()
+        ledger.close.assert_called_once()
+        lease.close.assert_called_once()
+        self.assertIsNone(account.ledger)
+        self.assertIsNone(account.lease)

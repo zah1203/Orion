@@ -6,6 +6,17 @@ type Policy = {
   enrolled: boolean; reviewed: boolean; version: number | null;
   limits: Record<string, string | number> | null;
 };
+type Health = {
+  account: { state: string; checked_at: string | null; exposure: number | null;
+    uncovered: number | null; pending_commands: number | null;
+    incident_count: number | null; unverified_fee_fills: number | null };
+};
+const healthLabels: Record<string, string> = {
+  "not-started": "Live monitoring has not started.", "not-checked": "No broker check recorded.",
+  observed: "Last broker book matched.", "awaiting-broker": "Waiting for broker confirmation.",
+  stale: "The last broker check is stale.", "review-required": "Operator review is required.",
+  "recovery-quarantine": "Recovered data is isolated from trading.",
+};
 const fields = [
   ["capital", "Capital (₹)"], ["max_order_premium", "Maximum order premium (₹)"],
   ["max_open_premium", "Maximum open premium (₹)"], ["daily_loss", "Daily loss limit (₹)"],
@@ -20,6 +31,10 @@ export default function LivePilot({ owner, uid, users = [] }: {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [target, setTarget] = useState(uid);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [healthResult, setHealth] = useState<{ key: string; value: Health } | null>(null);
+  const healthPath = owner ? "/admin/live/health/" + target : "/live/health";
+  const healthKey = uid + ":" + healthPath;
+  const health = healthResult?.key === healthKey ? healthResult.value : null;
   const [totp, setTotp] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -30,6 +45,18 @@ export default function LivePilot({ owner, uid, users = [] }: {
       .catch(() => { if (mounted) setError("Pilot status could not be loaded."); });
     return () => { mounted = false; };
   }, [uid]);
+  useEffect(() => {
+    let mounted = true;
+    async function refresh() {
+      try {
+        const value = await api(healthPath);
+        if (mounted) setHealth({ key: healthKey, value });
+      } catch { if (mounted) setHealth(null); }
+    }
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, 20000);
+    return () => { mounted = false; clearInterval(timer); };
+  }, [healthPath, healthKey]);
   async function run(work: () => Promise<void>) {
     setBusy(true); setError(""); setNotice("");
     try { await work(); setPolicy(await api("/live/pilot")); }
@@ -56,6 +83,13 @@ export default function LivePilot({ owner, uid, users = [] }: {
         await api("/live/pilot/revoke", {}); setNotice("Pilot enrollment withdrawn.");
       })}
     </> : null}
+    <Text style={s.title}>{owner ? "Selected account’s Live health" : "Your Live health"}</Text>
+    <Text style={s.text}>{health ? (healthLabels[health.account.state] || "Status unavailable.") : "Live health is unavailable."}</Text>
+    {health?.account.checked_at ? <Text style={s.text}>Last check: {new Date(health.account.checked_at).toLocaleString()}</Text> : null}
+    {health?.account.exposure != null ? <Text style={s.text}>Last observed open units: {health.account.exposure}. Units without an observed stop: {health.account.uncovered}.</Text> : null}
+    {health?.account.pending_commands ? <Text style={s.error}>Orders awaiting confirmation: {health.account.pending_commands}.</Text> : null}
+    {health?.account.incident_count ? <Text accessibilityRole="alert" style={s.error}>Unresolved incidents: {health.account.incident_count}. Review the broker account before further action.</Text> : null}
+    {health?.account.unverified_fee_fills ? <Text style={s.text}>Charges are unverified for {health.account.unverified_fee_fills} fills. A new trading budget cannot be calculated yet.</Text> : null}
     {owner || policy?.reviewed ? <>
       <Text style={s.text}>Run the read-only broker check in a planned maintenance window. It refuses an active paper worker and does not stop it. A new broker login may affect existing sessions.</Text>
       <TextInput accessibilityLabel="Current broker TOTP" value={totp} onChangeText={setTotp}

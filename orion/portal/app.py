@@ -396,22 +396,21 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
     @app.get("/api/live/readiness")
     def live_readiness(request: Request):
         owner(request)
-        # Deliberately no broker calls, state initialization or live-mode mutation.
-        return {
-            "stage": "read-only-probe-available", "live_available": False,
-            "read_only_probe_available": True,
-            "order_submission_available": False, "pilot_scope": "owner-plus-one-reviewed-account",
-            "blockers": [
-                "broker-trading-session-and-identity",
-                "broker-response-normalization-and-position-reconciliation",
-                "protective-exits-and-partial-fill-handling",
-                "broker-verified-capital-fees-and-daily-risk",
-                "static-egress-and-broker-api-approval",
-                "live-ledger-backup-and-restore",
-                "owner-confirmation-and-deployment-gate",
-                "supervised-minimum-size-live-validation",
-            ],
-        }
+        from ..live.status import release_status
+        return release_status()
+
+    @app.get("/api/live/health")
+    def live_health(request: Request):
+        from ..live.status import account_status, release_status
+        uid = identity(request)["user_id"]
+        return dict(release=release_status(), account=account_status(store.root, uid))
+
+    @app.get("/api/admin/live/health/{uid}")
+    def admin_live_health(uid: str, request: Request):
+        from ..live.status import account_status, release_status
+        owner(request)
+        store.user(uid)
+        return dict(release=release_status(), account=account_status(store.root, uid))
 
     @app.post("/api/live/probe")
     async def live_probe(body: LiveReadOnly, request: Request):

@@ -150,6 +150,39 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker snapshot rejected') from None
 
+    def evidence(self):
+        """Collect stable books plus trades and RMS fields, without certifying cash.
+
+        Book reads bracket the trade/position reads. A moving or inconsistent
+        snapshot is rejected; it cannot authorize a new order. No raw SDK response
+        or undocumented fields leave this boundary.
+        """
+        from .trades import normalize_trades
+        self._check()
+        started, clock = datetime.now(timezone.utc), time.monotonic()
+        try:
+            before = normalize_orders(self.client.order_report(), self.ucc)
+            trades = self.client.trade_report()
+            positions = normalize_positions(self.client.positions(), self.ucc)
+            limits = envelope(self.client.limits())
+            after = normalize_orders(self.client.order_report(), self.ucc)
+            self._check()
+            completed = datetime.now(timezone.utc)
+            if before != after or time.monotonic()-clock > 20:
+                raise ValueError
+            # Net includes RMS adjustments/collateral. It is never available cash.
+            from .readonly import number
+            rms_net = str(number(limits.get('Net')))
+            return dict(ucc=self.ucc, started_at=started.isoformat(), completed_at=completed.isoformat(),
+                        orders=[dict(broker_id=oid, **row) for oid, row in after.items()],
+                        positions=[dict(instrument=key, quantity=qty) for key, qty in positions.items()],
+                        trades=normalize_trades(trades, self.ucc, after, completed_at=completed),
+                        rms_net=rms_net, fees_verified=False, available_cash_verified=False,
+                        historical_complete=False)
+        except Exception:
+            self.closed = True
+            raise TransportFailure('Broker evidence rejected') from None
+
 
 def make_client(creds, *, transport=None):
     """Pinned SDK factory; called inside the private child, never on import.

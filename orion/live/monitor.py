@@ -16,7 +16,8 @@ from .protection import Protection, check_conflicts
 
 
 class ProtectionMonitor:
-    def __init__(self, ledger, session):
+    def __init__(self, ledger, session, *, collect_trades=False):
+        self.collect_trades = collect_trades
         self.ledger, self.db, self.session = ledger, ledger.db, session
         self.protection = Protection(ledger)
         self.commands = Commands(ledger, session)
@@ -76,8 +77,12 @@ class ProtectionMonitor:
         if type(entries_allowed) is not bool:
             raise Refused('Explicit entry state required')
         try:
-            snapshot = self.session.request('snapshot')
-            self.observations.ingest_snapshot(snapshot)
+            if self.collect_trades:
+                snapshot = self.session.request('evidence')
+                self.observations.ingest_evidence(snapshot)
+            else:
+                snapshot = self.session.request('snapshot')
+                self.observations.ingest_snapshot(snapshot)
             if not entries_allowed:
                 self.ledger.pause()
             check_conflicts(self.db)
@@ -155,12 +160,17 @@ class AccountMonitor:
             return self.monitor.cycle(entries_allowed=False)
 
     def __exit__(self, *unused):
-        if self.session is not None:
-            self.session.close()
+        # A failed SDK/process cleanup must not leak the account lease or database.
+        try:
+            if self.session is not None:
+                self.session.close()
+        finally:
             self.session = None
-        if self.ledger is not None:
-            self.ledger.close()
-            self.ledger = None
-        if self.lease is not None:
-            self.lease.close()
-            self.lease = None
+            try:
+                if self.ledger is not None:
+                    self.ledger.close()
+            finally:
+                self.ledger = None
+                if self.lease is not None:
+                    self.lease.close()
+                    self.lease = None

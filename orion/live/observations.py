@@ -22,6 +22,30 @@ class Observations:
         self.protection = Protection(ledger)
         self.ucc = ucc
 
+    def ingest_evidence(self, snapshot):
+        """Commit matching order, position and fill evidence as one transaction.
+
+        Incomplete trades roll back order transitions and command confirmations
+        too. Collectors cannot leave a partly reconciled, apparently fresh book.
+        Fee/cash flags remain unverified and never grant entry permission.
+        """
+        from .trades import TradeJournal
+        journal = TradeJournal(self.ledger, self.ucc)
+        try:
+            with self.ledger.transaction():
+                self.ingest_snapshot(snapshot)
+                inserted = journal.ingest(snapshot)
+                # Fill evidence participates in the reconciliation fingerprint.
+                result = self.ingest_snapshot(snapshot)
+            return dict(result, new_fills=inserted, fees_verified=False,
+                        available_cash_verified=False)
+        except Exception:
+            with self.ledger.transaction():
+                self.db.execute("INSERT OR IGNORE INTO live_incidents VALUES('fill-history-conflict')")
+                self.db.execute('DELETE FROM reconciliation_state')
+                self.ledger.pause()
+            raise Refused('Combined broker evidence requires review') from None
+
     def ingest_snapshot(self, snapshot):
         """Accept the process adapter's sanitized representation, validate again."""
         try:

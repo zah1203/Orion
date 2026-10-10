@@ -40,6 +40,19 @@ substitute for an integrated acceptance decision.
   never submits a BUY. The account wrapper acquires the existing worker lease before
   calling its session factory, so an active Paper worker cannot be displaced or
   subjected to a competing login. No production launcher constructs it yet.
+- An atomic broker evidence path joining stable order/position books with the
+  current-day trade report. The private SDK process discards unnecessary response
+  fields, joins missing trade tokens only through account-bound order IDs, checks
+  fill quantities/prices/times and rejects changed books. A missing or conflicting
+  fill rolls back order transitions and command confirmations as well as fills.
+  Replayed fills are idempotent. Broker charges remain explicitly unverified;
+  accounting refuses to calculate a trading budget from placeholder zero fees.
+  RMS Net is retained as a diagnostic only, never treated as spendable cash.
+- Read-only account health endpoints and Account/Owner displays for last observed
+  exposure, uncovered units, pending commands, stale checks and incident counts.
+  Reads never create a ledger, authenticate to the broker, clear incidents or
+  enable orders. Owners can inspect selected accounts; other users see only their
+  own health. Missing, corrupt, misbound and recovered ledgers cannot look healthy.
 - Append-only, account-bound fee corrections with opaque statement references,
   idempotent replay, time ordering and as-of accounting. Original fill evidence is
   unchanged. Broker statement import and verification of actual charges remain open.
@@ -68,9 +81,9 @@ No production workers or accounts are changed by developing or merging code.
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
 | Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; entry feed and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending |
 | Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; targets/trailing still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
-| Multi-day trade/order history and fee corrections | Retained terminal history and fee corrections implemented; broker trade/statement collection still open | Day rollover, carried positions, absent working orders, archive conflicts and fee corrections tested locally |
+| Multi-day trade/order history and fee corrections | Retained terminal history, bounded current-day trade collection and fee corrections implemented; verified statement import still open | Day rollover, carried positions, absent working orders, archive conflicts and fee corrections tested locally |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
-| Live monitoring, incidents and controlled daily reset | Not implemented | Operator-visible unprotected exposure, stale feeds and tested recovery |
+| Live monitoring, incidents and controlled daily reset | Account/Owner health displays and read-only endpoints implemented; production alert delivery and reviewed incident resolution remain open | Account isolation, stale/corrupt/missing ledger tests; no reset or automatic incident clearing |
 | Production two-account execution routing | Not implemented | Independent sessions/ledgers, no cross-account orders, fresh approval at each boundary |
 | Actual AWS live-ledger restore drill | Not performed | Encrypted upload/readback and isolated restore using the deployed recovery build |
 | Supervised real order | Not performed/authorized | Explicit account-owner approval after all previous gates pass |
@@ -86,7 +99,7 @@ switch work. Pilot consent means reviewing configuration, not authorizing trades
 integration components; no production entrypoint constructs them. The command
 journal is not an authorization/risk gate. It only accepts an already-committed
 dispatch and does not replace the outstanding policy, cash, fee and worker checks.
-Current books are not a historical archive, and the adapter deliberately does not
+Current books and current-day trades are not a historical archive, and the adapter deliberately does not
 claim that RMS Net is available cash. A missing order remains a blocker.
 The sole exception is an earlier-day terminal order with previously sealed,
 unchanged order/fill evidence. Retaining an order does not certify its fees, broker
@@ -140,6 +153,38 @@ variable, repository variable, timer or UI button that enables real order submis
 in this draft. No new systemd Live service is installed. No trading behavior changes
 on October 19 merely because that date arrives.
 
+## Integrated evidence and operator checks
+
+The session's `evidence` operation brackets trades, positions and limits with two
+order-book reads. Both normalized books must match within the existing 20-second
+collection bound. The full process call still has its wall-clock deadline and no
+retry. This detects a moving order book; it does not prove the broker APIs provide
+an atomic or complete snapshot. Actual account response validation remains open.
+
+`Observations.ingest_evidence` commits observed orders, positions, command
+confirmations and current-day fills together. It rechecks reconciliation after
+adding the fill fingerprint. `ProtectionMonitor(collect_trades=True)` exercises
+this path before a protective command. Tests use the real adapter with a synthetic
+SDK, including a partial fill, cancellation race, incremental stop coverage and
+late fills. There is still no production launcher or BUY authorization path.
+
+The SDK trade report does not provide verified charges, and the RMS documentation
+does not establish a spendable-cash field. Each imported fill therefore has an
+explicit `broker_fill_evidence.fee_status=unverified` marker. A zero fee in the
+immutable fill row is only a storage placeholder. `Accounting.summary` refuses
+risk accounting while any such evidence exists, even after an offline fee
+correction. Terminal history sealing also remains blocked until verified fee
+import is implemented. Do not manually remove these markers to enable entries.
+
+Health is observational: a matching book does not mean the release is authorized.
+Counts refer to the last successfully ingested book. During a failed cycle, actual
+broker exposure may have changed; investigate using the broker application.
+A stale check (older than 30 seconds), unresolved command or incident must not be
+cleared by editing SQLite or restarting the service. The health endpoints use
+read-only SQLite connections and return counts/statuses, not broker IDs or secrets.
+The UI refreshes health every 20 seconds while mounted and discards failed reads.
+No automatic liquidation, retry, incident reset or worker restart is provided.
+
 ## Preparation API
 
 All routes use existing web CSRF/Origin or native bearer authorization.
@@ -148,6 +193,7 @@ No API credentials, TOTP seeds or passwords belong in GitHub inputs or chat.
 - Owner: `PUT /api/admin/live/pilot/{uid}` with `limits` containing capital,
   max_order_premium, max_open_premium, daily_loss, max_trade_loss, max_open_risk,
   fee_reserve (rupee decimal strings), max_lots and max_entries (integers).
+- Account health: `GET /api/live/health`; owner inspection: `GET /api/admin/live/health/{uid}`.
 - Account: `GET /api/live/pilot`; review current policy with
   `POST /api/live/pilot/review`, version and confirmation `REVIEW PILOT LIMITS`.
 - Account withdrawal: `POST /api/live/pilot/revoke` with `{}`.
