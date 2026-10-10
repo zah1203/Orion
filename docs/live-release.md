@@ -541,3 +541,43 @@ handoff; it must never wrap network I/O inside the reservation transaction.
 
 These changes do not complete the production BUY gate, cash/charge adapters,
 service deployment or real broker/AWS acceptance.
+
+## Candidate funding evidence for broker acceptance
+
+`session.request('funding', request=..., token=...)` is now a read-only operation
+in the bounded private broker process and is permitted by the protective session.
+It validates an NSE NRML BUY candidate without submitting it, reads RMS limits,
+requests candidate-specific margin, then reads RMS limits again. The allowlisted
+RMS monetary fields must remain equal, broker timestamps must be fresh and
+nondecreasing, and the complete evidence window must fit five seconds. The
+existing process deadline still bounds a stalled transport; slow evidence is
+rejected rather than returned as current.
+
+Only normalized numeric fields, the bound candidate/account identity and
+observation timestamps leave the private process. Unexpected response identity,
+missing fields, stale timestamps, invalid numbers or moving RMS values close the
+session and require review; nothing retries or places an order. Signed Net/MTM
+values are preserved, including the precision shown by the official example.
+Unknown fields, raw identity strings and SDK error text are not returned.
+
+Sources inspected for this implementation:
+
+- [Official SDK limits schema](https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/limits.md)
+  (file blob `3433619ebacaea5b04f2e0e78f7dea2a5d61f898`). This documents an ALL
+  segments/products RMS request, collateral-related values, Net and TimeStamp.
+- [Official SDK margin schema](https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/margin_required.md).
+  This documents candidate parameters and reported avlCash/margin/shortfall fields.
+
+These examples do not establish a reviewed cash-only spending formula for our
+NSE NRML pilot or a complete final-charge record. `BrokeragePrsnt=0` is not proof
+of zero total charges. Accordingly the funding result retains
+`available_cash_verified=False`, `fees_verified=False` and
+`order_submission_available=False`. A positive `insufFund` is surfaced as
+`broker_reports_shortfall`; zero shortfall is not an execution permit. No account's
+balance, credential or statement is added to Git by this feature.
+
+Actual account compatibility still needs the existing explicit read-only login
+and worker lease, and comparison with that account's broker records. This code
+has only been exercised with synthetic responses, including a private-process
+integration test. It is not connected to production entry dispatch or a portal
+route, and cannot unblock the BUY gate on its own.

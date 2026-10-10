@@ -181,6 +181,42 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker margin evidence rejected') from None
 
+    def funding(self, request, token):
+        """Bracket a candidate margin check with fresh, stable RMS observations.
+
+        Read-only evidence for acceptance testing. A zero reported shortfall
+        does not prove available cash, verified charges or permission to buy.
+        """
+        from .funding import limits_observation
+        request.parameters()
+        if request.kind != 'ENTRY' or not isinstance(token, str) or not re.fullmatch(r'[1-9][0-9]{0,11}', token):
+            raise Refused('Bound entry instrument required')
+        self._check()
+        started, clock = datetime.now(timezone.utc), time.monotonic()
+        try:
+            before, before_at = limits_observation(self.client.limits(), self.ucc,
+                                                   now=datetime.now(timezone.utc))
+            estimate = self.margin(request, token)
+            after, after_at = limits_observation(self.client.limits(), self.ucc,
+                                                 now=datetime.now(timezone.utc))
+            self._check()
+            completed = datetime.now(timezone.utc)
+            if (before != after or after_at < before_at or time.monotonic()-clock > 5 or
+                    not 0 <= (completed-before_at).total_seconds() <= 5):
+                raise ValueError
+            return dict(ucc=self.ucc, token=token, symbol=request.symbol,
+                quantity=request.quantity, price=estimate['price'],
+                started_at=started.isoformat(), completed_at=completed.isoformat(),
+                rms_before_at=before_at.isoformat(), rms_after_at=after_at.isoformat(),
+                reported_limits={k:str(v) for k,v in after.items()},
+                reported_margin=estimate['reported'],
+                broker_reports_shortfall=bounded_amount(estimate['reported']['insufFund']) > 0,
+                available_cash_verified=False, fees_verified=False,
+                order_submission_available=False)
+        except Exception:
+            self.closed = True
+            raise TransportFailure('Broker funding evidence rejected') from None
+
     def quotes(self, requested):
         """Account-session-bound depth reads; no market-open assertion or retry."""
         from .quotes import instruments, normalize_quotes
