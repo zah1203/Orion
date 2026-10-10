@@ -403,3 +403,36 @@ The journal is included in normal SQLite backups. No delivery endpoint, recipien
 configuration or production sender is enabled by this change; actual alert delivery
 and reviewed incident resolution remain release blockers. Tests cover transaction
 rollback, restart, uncertain outcomes, account binding and competing claims.
+
+## Opt-in Live notification transport
+
+`LiveNotifications` provides an explicit one-shot delivery cycle for an existing
+account's Live ledger. It verifies the ledger belongs to the supplied Store and
+selects that account's primary registered device (latest expiry, deterministic ID
+order), never a different user's device. No registered device leaves the alert
+pending. Device expiry, opt-out, reassignment, account approval and registration
+errors are checked before sending. The message contains no account identifiers,
+positions, incident text or broker details. Device tokens remain encrypted at rest.
+
+The delivery claim commits before the send. A returned ticket is stored for a
+receipt check after 15 minutes; ticket acceptance alone never finishes an alert.
+A successful receipt records provider acceptance, **not** proof that a person saw
+the alert. Missing receipts are read again, without resending, for at most one
+hour. An error or uncertain send becomes UNKNOWN. A crash between send and ticket
+storage remains SENDING for review. DeviceNotRegistered blocks further sends to
+that device until registration is renewed. Redirects are refused and response
+size/socket timeout are bounded. The device registration transaction remains
+locked through the send to prevent reassignment races; do not run this sender in
+the time-critical trading cycle.
+
+Reference: https://docs.expo.dev/push-notifications/sending-notifications/
+
+An independent explicit runner is available as `python -m orion.live.notifications`,
+using `ORION_PORTAL_DATA` and the private `ORION_PORTAL_KEY_FILE`. It leases
+`live-notifications.lock`, processes existing ledgers only, and checks every 15
+seconds. No installer starts it automatically. No notifications were sent during
+development; tests use a fake provider. Deployment, device acceptance and human
+incident-resolution workflows remain outstanding. Expo push
+requires a registered supported app/device; opening the web portal alone does not
+establish that alerts can be delivered. The existing Paper attention service and
+its notification behavior are unchanged.
