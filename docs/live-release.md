@@ -581,3 +581,36 @@ and worker lease, and comparison with that account's broker records. This code
 has only been exercised with synthetic responses, including a private-process
 integration test. It is not connected to production entry dispatch or a portal
 route, and cannot unblock the BUY gate on its own.
+
+## Provisional intraday fee reserves versus final charges
+
+Kotak describes a consolidated end-of-day contract note and states that actual
+charges are in that note:
+
+- [Contract-note timing](https://www.kotakneo.com/support/what-are-the-key-enhancements-made-in-contract-note/)
+- [Actual versus estimated charges](https://www.kotakneo.com/disclaimer/)
+
+The code must distinguish an intraday budget estimate from finalized accounting.
+`Accounting.estimate_budget(now=..., marks=..., fee_reserve=...)` now calculates
+an explicitly provisional budget from the existing fill journal. It retains a
+full round-trip fee reserve per entry with unverified fills today. Multiple
+partial fills do not multiply that reserve, and closing the position does not
+release it. The greater of the bound execution reserve and supplied reviewed
+reserve is used. Recorded charges/corrections above the reserve increase the
+budget; smaller corrections do not release the remaining reserve or get counted
+twice. Losses and mark freshness still use the existing accounting checks.
+
+An unverified fee from a previous day still requires reconciliation, so rolling
+past midnight cannot silently drop a pending charge. Missing fee bindings and
+nonpositive/invalid reserves are refused. Estimating writes no fills, corrections,
+fee provenance or order records. The result includes `fee_basis=provisional-reserve`,
+`recorded_fees`, `additional_fee_reserve`, `fees_verified=False` and
+`order_submission_available=False`.
+
+The existing `Accounting.summary`, history sealing and entry assessment remain
+strict. This separate method does not turn an arbitrary reserve into a guaranteed
+upper bound, replace the missing contract-note importer, or unblock production
+entries. Before using estimates for real entry decisions, the Live policy must
+explicitly adopt a reviewed fee-estimation model and reconcile actual statements;
+the cash-only spending interpretation and remaining entry/exit authorization
+requirements must also be completed. No actual account fee or statement was read.

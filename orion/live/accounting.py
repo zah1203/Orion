@@ -175,12 +175,61 @@ class Accounting:
         Carried unrealized losses count fully, gains never offset daily losses.
         This is not broker settlement MTM, available cash or an execution permit.
         """
+        return self._summary(now=now, marks=marks, allow_unverified=False)
+
+    def estimate_budget(self, *, now, marks, fee_reserve):
+        """Provisional intraday loss budget, never finalized charges or authority.
+
+        Retain a full round-trip reserve for each entry with unverified fills,
+        including closed entries. Corrections can increase the estimate but never
+        turn provenance into verified data. Older unreconciled charges still block.
+        """
+        now = timestamp(now)
+        reserve = bounded_amount(fee_reserve)
+        if not 0 < reserve <= 100000000:
+            raise Refused('Explicit positive fee reserve required')
+        day = now.astimezone(IST).date().isoformat()
+        with self.ledger.transaction(), localcontext() as context:
+            context.prec = 80
+            pending = []
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
+                pending = self.db.execute("SELECT * FROM broker_fill_evidence WHERE fee_status='unverified'").fetchall()
+            if any(r['trade_day'] != day for r in pending):
+                raise Refused('Prior-day charges require reconciliation')
+            tags = set()
+            for row in pending:
+                fill = self.db.execute('SELECT entry_tag FROM fill_history WHERE segment=? AND trade_day=? AND trade_id=?',
+                    (row['segment'],row['trade_day'],row['trade_id'])).fetchone()
+                if not fill:
+                    raise Refused('Unbound fee evidence')
+                tags.add(fill[0])
+            value = self._summary(now=now, marks=marks, allow_unverified=True)
+            extra = Decimal(0)
+            for tag in tags:
+                terms = self.db.execute('SELECT fee_reserve FROM execution_terms WHERE tag=?',(tag,)).fetchone()
+                if not terms or not bounded_amount(terms[0]):
+                    raise Refused('Bound fee reserve required')
+                recorded = Decimal(0)
+                for fill in self.db.execute('SELECT * FROM fill_history WHERE entry_tag=? AND trade_day=?',(tag,day)):
+                    correction = self.db.execute("""SELECT total_fee FROM fee_corrections
+                        WHERE segment=? AND trade_day=? AND trade_id=? AND reported_at<=?
+                        ORDER BY reported_at DESC LIMIT 1""",
+                        (fill['segment'],day,fill['trade_id'],now.isoformat())).fetchone()
+                    recorded += amount(correction[0] if correction else fill['fee'])
+                extra += max(Decimal(0), max(reserve, bounded_amount(terms[0]))-recorded)
+            return dict(value, fees=str(amount(value['fees'])+extra),
+                loss_used=str(amount(value['loss_used'])+extra),
+                recorded_fees=value['fees'], additional_fee_reserve=str(extra),
+                fee_basis='provisional-reserve', unverified_fee_entries=len(tags),
+                fees_verified=False, order_submission_available=False)
+
+    def _summary(self, *, now, marks, allow_unverified):
         now = timestamp(now)
         day = now.astimezone(IST).date().isoformat()
         with self.ledger.transaction(), localcontext() as context:
             context.prec = 80
             if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
-                if self.db.execute("SELECT 1 FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone():
+                if not allow_unverified and self.db.execute("SELECT 1 FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone():
                     raise Refused('Broker charges unverified; risk budget unavailable')
             fills = [dict(r) for r in self.db.execute('SELECT * FROM fill_history ORDER BY executed_at,trade_id')]
             orders = self._orders()
