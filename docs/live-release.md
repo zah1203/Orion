@@ -347,3 +347,35 @@ can still perform a book/protection cycle without marks; it must not invent or
 reuse prices after a quote failure. Tests use synthetic broker books and quotes,
 including wrong-account responses and quote aging during book collection. Actual
 broker acceptance, market status, entry cash/fees and activation remain pending.
+
+## Order-specific margin evidence and external acceptance
+
+`KotakSession.margin` and the private-process `margin` operation perform a read-only
+NSE NRML BUY-limit estimate for an explicit token, price and whole-lot quantity.
+Only allowlisted numeric response fields cross the process boundary. Missing,
+non-finite, negative, failed or slow responses are rejected without SDK output or
+retry. A successful estimate is **not** available-cash or fee certification and
+cannot authorize an order. The response remains bound to its requested candidate.
+
+Reference: https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/margin_required.md
+
+Before production entry integration can be accepted, obtain broker confirmation
+of available buying power versus used/reserved margin, fee/charge evidence, and
+market-session identification. Do not promote `Net`, `avlCash`, or an RMS `OK`
+into an execution permit merely because a synthetic test passes.
+
+As checked on 2026-10-10, NSE publishes a contingency/mock-session calendar:
+https://www.nseindia.com/resources/exchange-communication-contingency-drill-calendar
+This does not confirm Kotak customer API access on any particular weekend.
+Obtain the broker's exact dated notice, supported segment/API, IST times, endpoint
+and credential instructions, and confirmation of settlement/funds treatment.
+Never infer mock mode from Saturday/Sunday or point production credentials at a
+made-up sandbox URL. Do not merge mock fills into real or Paper ledgers.
+
+For next-week testing without interrupting Paper: use isolated fixtures/replay
+first. Broker authentication on the same account may affect its active session;
+the shared worker lease deliberately refuses competing probes. A live-data test
+therefore needs a separately provisioned test account/environment or an agreed
+account handover window. The current deployment restarts workers, so do not run
+it while uninterrupted Paper observation is required. No such deployment or
+broker session was performed as part of this change.

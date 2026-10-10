@@ -150,6 +150,37 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker snapshot rejected') from None
 
+    def margin(self, request, token):
+        """Read an order-specific estimate; never grants spending authority."""
+        parameters = request.parameters()
+        if request.kind != 'ENTRY' or not isinstance(token, str) or not re.fullmatch(r'[1-9][0-9]{0,11}', token):
+            raise Refused('Bound entry instrument required')
+        self._check()
+        started = datetime.now(timezone.utc)
+        try:
+            response = self.client.margin_required(
+                exchange_segment='nse_fo', product='NRML', order_type='L',
+                transaction_type='B', instrument_token=token,
+                price=parameters['price'], quantity=parameters['quantity'])
+            self._check()
+            completed = datetime.now(timezone.utc)
+            if not 0 <= (completed-started).total_seconds() <= 5:
+                raise ValueError
+            data = response['data']
+            if (data.get('stat') != 'Ok' or type(data.get('stCode')) is not int or
+                    data['stCode'] != 200 or data.get('rmsVldtd') != 'OK' or data.get('errMsg') not in (None, '')):
+                raise ValueError
+            fields = {k:str(bounded_amount(data[k])) for k in
+                      ('avlCash','totMrgnUsd','mrgnUsd','ordMrgn','reqdMrgn','avlMrgn','insufFund')}
+            return dict(ucc=self.ucc, token=token, symbol=request.symbol,
+                        quantity=request.quantity, price=parameters['price'],
+                        started_at=started.isoformat(), completed_at=completed.isoformat(),
+                        reported=fields, available_cash_verified=False,
+                        fees_verified=False, order_submission_available=False)
+        except Exception:
+            self.closed = True
+            raise TransportFailure('Broker margin evidence rejected') from None
+
     def quotes(self, requested):
         """Account-session-bound depth reads; no market-open assertion or retry."""
         from .quotes import instruments, normalize_quotes
