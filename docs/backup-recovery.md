@@ -273,3 +273,15 @@ DB/session, wrong keys, archive corruption, malicious members, unknown files,
 source symlinks, timeouts, destination refusal, no network, source state preserved,
 restored service guard, and mocked S3 security/versioned readback failures. CI runs
 these without AWS credentials or production data.
+
+
+### Historical catalogue files
+
+The encrypted archive also preserves root-level
+`contracts.backup-YYYYMMDD-HHMMSS.json` and `economics-YYYY-MM-DD.json` files,
+plus `broker-exports/{nse_fo,mcx_fo}.csv` and their `.receipt.json` companions.
+These are copied with the same source-stability and checksum checks as other
+non-database files, and restored byte-for-byte into the isolated destination.
+Historical files do not replace the active contracts/economics files. Unknown
+files and symlinks still fail validation; the inventory does not include arbitrary
+directory contents. No source files need to be deleted to activate backups.

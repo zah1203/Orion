@@ -74,6 +74,33 @@ class RecoveryTests(unittest.TestCase):
     def backup(self):
         return r.create(self.portal, self.runtime, self.config, self.output, self.backup_key, self.key, self.work)
 
+    def test_catalogue_history_and_broker_exports_round_trip(self):
+        names = ["contracts.backup-20260929-204032.json", "economics-2026-09-29.json",
+                 "broker-exports/nse_fo.csv", "broker-exports/mcx_fo.csv",
+                 "broker-exports/nse_fo.csv.receipt.json", "broker-exports/mcx_fo.csv.receipt.json"]
+        for name in names:
+            path = self.portal / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(b"historical catalogue fixture")
+        archive, manifest = self.backup()
+        r.restore(archive, self.root / "restored", self.backup_key, self.key, self.work)
+        for name in names:
+            self.assertIn("portal/" + name, manifest["files"])
+            self.assertEqual((self.root / "restored/portal" / name).read_bytes(),
+                             (self.portal / name).read_bytes())
+        for name in ["broker-exports/credentials.json", "contracts.backup-private.json",
+                     "economics-secret.json", "broker-exports/nse_fo.csv.extra"]:
+            unexpected = self.portal / name
+            unexpected.touch()
+            with self.assertRaisesRegex(ValueError, "Unknown file"):
+                r.inventory(self.portal, self.runtime, self.config)
+            unexpected.unlink()
+        symlink = self.portal / "broker-exports/nse_fo.csv"
+        symlink.unlink()
+        symlink.symlink_to(self.config / "portal.key")
+        with self.assertRaisesRegex(ValueError, "Symlink"):
+            r.inventory(self.portal, self.runtime, self.config)
+
     def test_round_trip_accounts_positions_credentials_wal_and_no_production_changes(self):
         self.assertTrue(Path(str(self.portal / "accounts.db") + "-wal").exists())
         with patch("socket.socket", side_effect=AssertionError("Network forbidden")):
