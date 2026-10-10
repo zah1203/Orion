@@ -20,6 +20,20 @@ substitute for an integrated acceptance decision.
   Dispatch rechecks signal/quote age, daily attempt count, fee/stop-risk budgets,
   available capital and all prepared/unresolved premium reservations. Nested SQLite
   savepoints keep the decision and dispatch intent atomic before simulated I/O.
+- A pinned Kotak 3.0.7 adapter with explicit NSE NRML limit-order mapping and
+  strict acknowledgement validation. A private process holds the authenticated
+  session; each call has a wall-clock deadline. Timeout kills/reaps the process
+  and removes its temporary cache. Credentials are sent through an anonymous pipe,
+  never command arguments, files or logs. HTTP redirects and retries are disabled.
+- A durable command journal linking already-committed dispatches to that adapter.
+  Placement/cancellation is one-shot across restart. An acknowledgement binds an
+  order ID but never implies a fill or completed cancellation. Unknown responses
+  pause the ledger and require review; order tags are not treated as idempotency keys.
+- Atomic ingestion of account-bound current order/position books, including partial
+  fills and fill/cancel races. Identity, quantity, entry limits and protective stop
+  limits must match. A conflicting batch rolls back and leaves a durable incident.
+  Additional confirmed entry lots can receive disjoint protective stops without
+  cancelling existing protection; unknown stops and cancels retain sell capacity.
 - Online `live.db` backup through the SQLite backup API, including committed WAL
   data. Archive verification checks account binding and integrity. Isolated restore
   preserves paper/live ledger bytes, revokes pilot enrollment and writes the recovery
@@ -33,9 +47,9 @@ No production workers or accounts are changed by developing or merging code.
 
 | Requirement | Current status | Acceptance evidence |
 | --- | --- | --- |
-| Kotak order transport and bounded session handling | Not implemented | Fake-SDK failure tests, then separately approved account-bound broker validation |
+| Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
 | Telegram/quote Live worker and lease/supervisor integration | Not implemented | End-to-end signals to reconciled orders with no paper mutation |
-| Partial-entry protection and serialized target/trailing exits | Incomplete; terminal-entry simulator only | Partial fills, rejects, fill/cancel races, disconnects and restart tests |
+| Partial-entry protection and serialized target/trailing exits | Confirmed partial-fill protection implemented; worker coordination and targets/trailing still open | Disjoint capacity and cancel-race tests pass; end-to-end strategy acceptance pending |
 | Multi-day trade/order history and fee corrections | Incomplete | Overnight positions and absent historical orders reconcile without assumptions |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
 | Live monitoring, incidents and controlled daily reset | Not implemented | Operator-visible unprotected exposure, stale feeds and tested recovery |
@@ -49,6 +63,35 @@ one open exposure per account, and conservative lifetime reservations inherited
 from the foundation. It is not a production worker or a substitute for pending
 transport/strategy work. Do not remove these restrictions to make an activation
 switch work. Pilot consent means reviewing configuration, not authorizing trades.
+
+`KotakSession`, `ProcessSession`, `Commands` and `Observations` are the new transport
+integration components; no production entrypoint constructs them. The command
+journal is not an authorization/risk gate. It only accepts an already-committed
+dispatch and does not replace the outstanding policy, cash, fee and worker checks.
+Current books are not a historical archive, and the adapter deliberately does not
+claim that RMS Net is available cash. A missing order remains a blocker.
+
+The SDK adapter maps protective sells to **stop-limit (SL)** with an explicit,
+tick-aligned limit no higher than the trigger. A triggered stop-limit may remain
+unfilled through a price gap. The simulated SL-M examples do not prove that market
+stops are available for the actual instrument. Production needs a reviewed stop
+limit/gap policy, monitoring and an explicit escalation procedure before activation.
+Do not round an odd-lot partial fill upward or sell beyond confirmed exposure.
+The future worker must request cancellation of the unfilled entry remainder on
+the first partial fill and continue observing/protecting any fills that win that
+race. That automatic coordination is not connected by this commit.
+
+## Transport validation evidence
+
+`test_live_kotak.py` exercises the installed pinned SDK through HTTP MockTransport;
+it never sends a broker request. Other cases use synthetic SDKs to check identity
+and route changes, expired sessions, malformed acknowledgements, sensitive error
+suppression, process timeout and cleanup. `test_live_commands.py` verifies durable
+handoff, crash-before-send, accepted-but-timed-out placement, cancellation races
+and cross-account rejection. `test_live_observations.py` verifies all-or-nothing
+book ingestion, missing orders, changed terminal fills and protective price checks.
+`test_live_protection.py` includes incremental partial fills and retained capacity
+during cancellation. None of these tests is a real broker or AWS acceptance test.
 
 The production Paper/Live API still returns 409 for Live. There is no environment
 variable, repository variable, timer or UI button that enables real order submission

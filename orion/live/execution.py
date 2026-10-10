@@ -141,7 +141,7 @@ class ExecutionHarness:
             symbol=body['symbol'], quantity=body['quantity'], status=status, filled=filled, average=average)
 
     def protective_exit(self, entry_tag):
-        """Protect terminal confirmed entry exposure; never implies a target/OCO."""
+        """Protect confirmed entry exposure; never implies a target/OCO."""
         terms = self.ledger.db.execute('SELECT * FROM execution_terms WHERE tag=?', (entry_tag,)).fetchone()
         if not terms:
             raise Refused('Execution terms required')

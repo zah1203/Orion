@@ -6,8 +6,13 @@ import re
 from .ledger import Refused, amount, positive_int
 
 
+def check_conflicts(db):
+    if db.execute("SELECT 1 FROM live_incidents WHERE code IN ('protective-observation-conflict','protective-outcome-unknown','broker-snapshot-mismatch','fill-history-conflict','broker-command-unknown','broker-observation-conflict')").fetchone():
+        raise Refused("Protective reconciliation requires review")
+
+
 class Protection:
-    """Serialize sell capacity for one terminal entry; uncertainty locks entries.
+    """Reserve only confirmed exposure; uncertainty locks entries.
 
     An exit command is recorded once before a hypothetical send. Cancellation
     requests are never treated as cancellation confirmations. This harness does
@@ -32,8 +37,7 @@ class Protection:
             self.db.execute("UPDATE control SET paused=1 WHERE id=1")
 
     def _check_conflicts(self):
-        if self.db.execute("SELECT 1 FROM live_incidents WHERE code IN ('protective-observation-conflict','protective-outcome-unknown','broker-snapshot-mismatch','fill-history-conflict')").fetchone():
-            raise Refused("Protective reconciliation requires review")
+        check_conflicts(self.db)
 
     def get(self, tag):
         row = self.db.execute("SELECT * FROM protective_exits WHERE tag=?", (tag,)).fetchone()
@@ -43,8 +47,8 @@ class Protection:
 
     def _remaining(self, entry_tag):
         entry = self.ledger.get(entry_tag)
-        if entry['status'] not in ('FILLED', 'CANCELLED') or not entry['filled']:
-            raise Refused("Terminal filled entry required")
+        if entry['status'] not in ('PARTIAL', 'FILLED', 'CANCELLED') or not entry['filled']:
+            raise Refused("Confirmed entry fills required")
         sold = self.db.execute(
             "SELECT COALESCE(SUM(filled),0) FROM protective_exits WHERE entry_tag=?",
             (entry_tag,)).fetchone()[0]
@@ -53,20 +57,36 @@ class Protection:
             raise Refused("Exit fills exceed entry")
         return remaining
 
+    def _unreserved(self, entry_tag, excluding=None):
+        remaining = self._remaining(entry_tag)
+        for row in self.db.execute('SELECT * FROM protective_exits WHERE entry_tag=?', (entry_tag,)):
+            if row['tag'] != excluding and row['status'] not in ('FILLED', 'CANCELLED', 'REJECTED'):
+                remaining -= row['quantity'] - row['filled']
+        if remaining < 0:
+            raise Refused('Protective capacity exceeds confirmed exposure')
+        return remaining
+
     def prepare(self, entry_tag, *, trigger_price, tick_size, lot_size):
-        """Reserve all remaining sell capacity; no parallel stop/target orders."""
+        """Protect newly confirmed lots without cancelling existing protection.
+
+        Additional stops cover disjoint quantities only. Unknown sends/cancels
+        block additions; no target can borrow reserved stop capacity. The caller
+        must also cancel a still-working entry on its first partial fill.
+        """
         trigger, tick = amount(trigger_price), amount(tick_size)
         positive_int(lot_size)
         if not trigger or not tick or trigger % tick:
             raise Refused("Invalid protective price")
         with self.ledger.transaction():
             self._check_conflicts()
-            remaining = self._remaining(entry_tag)
+            remaining = self._unreserved(entry_tag)
             if not remaining or remaining % lot_size:
                 raise Refused("Nonzero whole-lot exposure required")
             rows = self.db.execute("SELECT * FROM protective_exits WHERE entry_tag=?", (entry_tag,)).fetchall()
-            if any(r['status'] not in ('FILLED', 'CANCELLED', 'REJECTED') for r in rows):
+            if any(r['status'] in ('PREPARED', 'DISPATCHING', 'UNKNOWN', 'CANCEL_PENDING') for r in rows):
                 raise Refused("Previous exit unresolved")
+            if any(r['status'] in ('OPEN', 'PARTIAL') and amount(r['trigger']) != trigger for r in rows):
+                raise Refused('Existing stop trigger must agree')
             tag = 'exit' + hashlib.sha256(f'{entry_tag}:{len(rows)}'.encode()).hexdigest()[:24]
             self.db.execute("INSERT INTO protective_exits(tag,entry_tag,quantity,trigger,status) VALUES(?,?,?,?,'PREPARED')",
                             (tag, entry_tag, remaining, str(trigger)))
@@ -78,7 +98,7 @@ class Protection:
         with self.ledger.transaction():
             self._check_conflicts()
             row = self.get(tag)
-            if self._remaining(row['entry_tag']) != row['quantity']:
+            if self._unreserved(row['entry_tag'], excluding=tag) < row['quantity']:
                 raise Refused("Exposure changed")
             result = self.db.execute("UPDATE protective_exits SET status='DISPATCHING' WHERE tag=? AND status='PREPARED'", (tag,))
             if result.rowcount != 1:

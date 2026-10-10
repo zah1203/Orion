@@ -120,6 +120,9 @@ class Ledger:
         self.db.execute("UPDATE control SET paused=1 WHERE id=1")
 
     def _check_incidents(self):
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_commands'").fetchone():
+            if self.db.execute("SELECT 1 FROM broker_commands WHERE status IN ('SENDING','UNKNOWN') OR (operation='cancel' AND status!='CONFIRMED')").fetchone():
+                raise Refused('Broker command requires reconciliation')
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='reconciliation_state'").fetchone():
             from .reconciliation import require_current
             require_current(self)
