@@ -3,7 +3,8 @@
 ## Current status
 
 Stage 1 provides the **offline development foundation**; Stage 2 adds an
-owner-triggered read-only broker probe. Merging or deploying this PR
+owner-triggered read-only broker probe; Stage 3 adds an offline protective-exit
+protocol. Merging or deploying this PR
 cannot submit broker orders. The production worker still opens paper.db, the
 Paper/Live API rejects Live, and no runtime imports the new ledger. There is no
 production enable flag, order-submission transport, executable live strategy, or order API.
@@ -145,3 +146,46 @@ Stage 2 schema references:
 - https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/orders/order_report.md
 - https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/positions.md
 - https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/limits.md
+
+## Stage 3: offline protective-exit protocol
+
+`orion/live/protection.py` is a synthetic, normalized-observation harness using
+additional tables in the development ledger. No runtime imports it and it has
+no SDK, HTTP, order placement, cancellation or liquidation implementation.
+Production Live remains disabled. This stage does not complete the execution
+and reconciliation gates listed above.
+
+For a terminal entry with confirmed fills, the harness reserves the remaining
+sell quantity for one protective exit. It refuses simultaneous stop/target exits,
+repeat dispatches, unresolved replacements and quantities requiring lot rounding.
+An entry still filling must first reach a confirmed terminal state; automatic
+incremental protection of a working entry is **not implemented**. Trigger prices,
+ticks, lot sizes and observations are supplied by tests, not broker verified.
+A prepared exit does not establish broker-accepted protection.
+
+Cancel requests persist as CANCEL_PENDING. Partial fills during cancellation
+update cumulative fills without releasing the remaining sell capacity. Only an
+explicit terminal observation permits a replacement for the remaining exposure.
+A fill winning the cancel race leaves no replacement quantity. Crash recovery
+retains DISPATCHING/UNKNOWN and never resends automatically. Observations check
+account, instrument, segment, sell side, quantity, broker identity and monotonic
+fills. Terminal contradictions roll back the observation, latch an incident and
+block replacement dispatch, including exits already prepared before the conflict.
+
+Rejection/cancellation with remaining exposure latches an unprotected-exposure
+incident. A replacement may be modeled, but cannot automatically clear the entry
+lock. Unknown outcomes and observation conflicts additionally block protective
+dispatch pending review. Incidents survive reopen; there is deliberately no
+production incident-clear endpoint. Pause never cancels or liquidates. This
+conservative offline gate blocks new entries while any tracked filled exposure
+remains, even when its modeled stop is open.
+
+Tests use fabricated account/order data and cover cancellation races, partial
+fills, rejected stops, contradictory late fills, lot remainders, concurrent
+reservations and restart uncertainty. They neither demonstrate real broker
+compatibility nor guarantee a stop execution price. Remaining requirements
+include raw broker normalization, stable trade IDs, complete/fresh account
+snapshots, external order/position detection, fees and daily risk accounting,
+working-entry protection, product and stop-order validation, broker transport,
+production controls and live-ledger backup support. No AWS operation, real broker
+read/order, deployment or worker restart was performed for this stage.
