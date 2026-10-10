@@ -124,7 +124,7 @@ class SignalRouter:
                     (source, digest, policy['version'], channel, channel_digest, source_at.isoformat(), received_at.isoformat(), body))
             return dict(source=source, duplicate=False, state='PENDING', order_submission_available=False)
 
-    def quote(self, source, *, segment, token, bid, ask, quoted_at, market_open):
+    def quote(self, source, *, segment, token, bid, ask, quoted_at, market_open, accounting=None, marks=None):
         """Size a candidate conservatively; no reservation, dispatch or resume.
 
         Even a matching quote is held behind the release's unresolved real-entry
@@ -145,6 +145,9 @@ class SignalRouter:
                 _, channel_digest = self._channel(policy, row['channel'])
                 if row['policy_version'] != policy['version'] or row['channel_digest'] != channel_digest:
                     raise Refused('Signal policy or channel changed')
+                now = datetime.now(timezone.utc)
+                if not 0 <= (now-at).total_seconds() <= 5:
+                    raise Refused('Quote expired while waiting for account lock')
                 source_at = datetime.fromisoformat(row['signal_time'])
                 if not 0 <= (now-source_at).total_seconds() <= 30 or at < source_at:
                     raise Refused('Signal expired or quote predates signal')
@@ -167,10 +170,21 @@ class SignalRouter:
                                int((risk/((ask-amount(signal['stop']))*lot)).to_integral_value(rounding=ROUND_FLOOR)))
                 if lots <= 0:
                     raise Refused('No whole lot fits reviewed policy')
-                return dict(account=self.uid, source=source, policy_version=policy['version'],
+                candidate = dict(account=self.uid, source=source, policy_version=policy['version'],
                     symbol=contract['symbol'], token=token, segment=segment, lots=lots,
                     quantity=lots*lot, lot_size=lot, limit_price=str(ask), tick=str(tick),
                     stop=signal['stop'], targets=signal['targets'],
                     order_submission_available=False,
                     blockers=['verified-cash-and-charges','current-ledger-risk-and-reservations',
                               'atomic-entry-authorization','production-feed-provenance'])
+                if accounting is not None:
+                    from .entry_risk import assess
+                    # Current consent/channel and risk are read under the same
+                    # account lock and ledger transaction; no cached policy.
+                    risk = assess(self.ledger, accounting, limits, candidate,
+                                  now=datetime.now(timezone.utc), marks=marks or {})
+                    candidate.update(lots=risk['lots'], quantity=risk['quantity'], risk=risk)
+                    candidate['blockers'].remove('current-ledger-risk-and-reservations')
+                    if risk['entries_paused']:
+                        candidate['blockers'].append('entries-paused')
+                return candidate

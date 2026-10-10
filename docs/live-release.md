@@ -460,3 +460,51 @@ callbacks; source and quote freshness checks still apply. Production throughput
 and shutdown timing require acceptance on the actual deployment. Worker tests use
 synthetic sessions, including continuing protective SELL management after source
 failure, busy Paper leases, two accounts and broker failure cleanup.
+
+
+## Current-policy entry risk assessment (not dispatch authority)
+
+`SignalRouter.quote(..., accounting=accounting, marks=marks)` can assess a
+candidate against the same account's existing ledger. The accounting object must
+belong to that exact ledger and broker identity. Without it, the result remains
+only the previous static policy ceiling. No broker request or order is made.
+
+The assessment holds the account lock and a ledger transaction while checking
+current consent, channel selection, source/quote freshness and the current
+reconciliation fingerprint. It subtracts all remaining premium and stop-risk
+reservations, keeps full fee reserves, counts pending entries across midnight,
+and reduces the proposal to whole lots that fit the remaining limits. Rejected
+same-day intents still count; an existing reservation for the source cannot be
+counted as a new signal. A changed policy cannot inherit an older signal's review.
+The quote's five-second freshness is rechecked after waiting for the account lock.
+
+A successful assessment is explicitly **not** a BUY permit. It reports paused
+state, never resumes entries and never creates an intent. The existing refusal
+for exposure requiring protection review remains in force. Imported unverified
+charges block accounting; no caller-provided cash number or boolean can establish
+verified available funds in this assessment. Source/market provenance, verified
+cash and charges, and atomic production dispatch remain release blockers.
+
+### Evidence still needed to finish the release
+
+The current branch is not a complete real-money release. Local tests use synthetic
+broker responses. Completing the following code and acceptance work is required:
+
+1. Review actual sanitized Kotak response schemas and the meaning of cash/margin
+   fields and charges; implement and test those adapters without treating RMS Net
+   or a margin estimate as available cash. Never commit credentials, session
+   tokens, account statements or raw personal account responses to Git.
+2. Connect the verified inputs, fresh account authorization and durable reservation
+   to a one-shot BUY dispatch boundary. Bind the signal to the reviewed stop-limit
+   gap and target policy, and validate market-open/master provenance.
+3. Implement the production startup/session handoff and supervisor integration
+   with an explicit per-account acceptance boundary. Existing Paper workers must
+   retain their leases until an agreed handover; the current installer restarts
+   services and is not a zero-interruption Live deployment procedure.
+4. Validate the deployed notification path and live-ledger AWS restore in an
+   isolated destination, then perform a separately authorized supervised broker
+   order test with the chosen account, instrument, quantity and limit.
+
+A merge, green CI run, backup success or target date does not satisfy these gates.
+There is no activation environment variable or locally asserted `verified=True`
+shortcut. The `/api/mode` Live rejection remains in place.
