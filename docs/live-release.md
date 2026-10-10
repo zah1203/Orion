@@ -43,6 +43,15 @@ substitute for an integrated acceptance decision.
 - Append-only, account-bound fee corrections with opaque statement references,
   idempotent replay, time ordering and as-of accounting. Original fill evidence is
   unchanged. Broker statement import and verification of actual charges remain open.
+- Sealed terminal-order history for daily broker-book rollover. Sealing requires
+  fresh reconciled books, complete fill evidence, matching execution averages and
+  fresh marks for carried exposure. Earlier-day evidence is revalidated against
+  local order/fill/instrument facts before use; today's positions must still match.
+  Missing same-day, working and unknown orders remain blockers. This is local
+  retained evidence, not an implementation of a broker historical-download API.
+- Daily IST entry counts and exposure-based premium/risk reservations. Confirmed
+  closed exposure releases capacity; paid fees and realized loss remain in daily
+  accounting. Unsent, working and unknown orders retain reservations across midnight.
 - Online `live.db` backup through the SQLite backup API, including committed WAL
   data. Archive verification checks account binding and integrity. Isolated restore
   preserves paper/live ledger bytes, revokes pilot enrollment and writes the recovery
@@ -59,7 +68,7 @@ No production workers or accounts are changed by developing or merging code.
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
 | Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; entry feed and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending |
 | Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; targets/trailing still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
-| Multi-day trade/order history and fee corrections | Append-only fee corrections implemented; broker statement ingestion and historical books still open | Fee replay, refunds, as-of evaluation and conflicts tested; overnight book acceptance pending |
+| Multi-day trade/order history and fee corrections | Retained terminal history and fee corrections implemented; broker trade/statement collection still open | Day rollover, carried positions, absent working orders, archive conflicts and fee corrections tested locally |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
 | Live monitoring, incidents and controlled daily reset | Not implemented | Operator-visible unprotected exposure, stale feeds and tested recovery |
 | Production two-account execution routing | Not implemented | Independent sessions/ledgers, no cross-account orders, fresh approval at each boundary |
@@ -68,8 +77,8 @@ No production workers or accounts are changed by developing or merging code.
 
 `ExecutionHarness` accepts only the built-in `SimulatedBroker`; replacing it with
 an SDK object is rejected. It supports only NSE NRML, unit premium multiplier 1,
-one open exposure per account, and conservative lifetime reservations inherited
-from the foundation. It is not a production worker or a substitute for pending
+one open exposure per account, daily entry limits and reservations for all pending
+or unsold exposure. It is not a production worker or a substitute for pending
 transport/strategy work. Do not remove these restrictions to make an activation
 switch work. Pilot consent means reviewing configuration, not authorizing trades.
 
@@ -79,6 +88,10 @@ journal is not an authorization/risk gate. It only accepts an already-committed
 dispatch and does not replace the outstanding policy, cash, fee and worker checks.
 Current books are not a historical archive, and the adapter deliberately does not
 claim that RMS Net is available cash. A missing order remains a blocker.
+The sole exception is an earlier-day terminal order with previously sealed,
+unchanged order/fill evidence. Retaining an order does not certify its fees, broker
+statement completeness, settlement or available cash. No code infers an expired
+DAY order merely because a new trading day began.
 
 The SDK adapter maps protective sells to **stop-limit (SL)** with an explicit,
 tick-aligned limit no higher than the trigger. A triggered stop-limit may remain
@@ -114,6 +127,13 @@ verifies that a competing worker prevents even session creation. Fee-correction
 tests preserve original fills across restart and reject cross-account, changed or
 out-of-order statement evidence. None of these tests is a real broker or AWS
 acceptance test.
+
+History tests cover next-day reconciliation and observation ingestion, restart,
+same-day absence, missing fills, changed local evidence and broker position mismatch.
+Reservation tests verify that midnight resets the count without releasing pending
+premium, and that a closed losing trade frees exposure while its loss still blocks
+the next order when the daily budget would be exceeded. Date rollover never clears
+incidents, resumes entries or bypasses a fresh broker-book comparison.
 
 The production Paper/Live API still returns 409 for Live. There is no environment
 variable, repository variable, timer or UI button that enables real order submission

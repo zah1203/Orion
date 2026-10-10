@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import sqlite3
 import uuid
+from zoneinfo import ZoneInfo
 
 
 class Refused(ValueError):
@@ -181,17 +182,34 @@ class Ledger:
                 raise Refused("Entries paused")
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():
                 raise Refused("Reconciliation required")
-            rows = self.db.execute("SELECT body,status,filled FROM intents").fetchall()
-            # Conservative lifetime cap until accounting/position closure is implemented.
-            if len(rows) >= limits.max_entries:
+            rows = self.db.execute("SELECT * FROM intents").fetchall()
+            from datetime import datetime
+            day = now.astimezone(ZoneInfo('Asia/Kolkata')).date()
+            if sum(datetime.fromisoformat(json.loads(r['body'])['signal_time']).astimezone(ZoneInfo('Asia/Kolkata')).date() == day for r in rows) >= limits.max_entries:
                 raise Refused("Entry limit reached")
-            used = sum((amount(json.loads(r['body'])['premium']) for r in rows
-                        if r['status'] not in ('REJECTED','CANCELLED') or r['filled']), Decimal(0))
+            used = sum((amount(json.loads(r['body'])['limit_price'])*self.reserved_units(r) for r in rows), Decimal(0))
             if used + price * lots * lot_size > limits.max_premium:
                 raise Refused("Premium budget exceeded")
             self.db.execute("INSERT INTO intents(tag,event,body,status) VALUES(?,?,?,'PREPARED')",
                             (tag, event, encoded))
         return self.get(tag)
+
+    def reserved_units(self, row):
+        """Working/unknown BUY remainder plus confirmed unsold exposure.
+
+        Sell acknowledgements, cancellation requests and the date changing never
+        release units. Only broker-confirmed sells or terminal unfilled buys do.
+        """
+        body = json.loads(row['body'])
+        sold = 0
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='protective_exits'").fetchone():
+            sold = self.db.execute('SELECT COALESCE(SUM(filled),0) FROM protective_exits WHERE entry_tag=?', (row['tag'],)).fetchone()[0]
+        if sold > row['filled']:
+            raise Refused('Confirmed exits exceed confirmed entries')
+        remaining = (row['filled'] if row['status'] in ('FILLED','CANCELLED','REJECTED') else body['quantity']) - sold
+        if remaining < 0:
+            raise Refused('Invalid reserved exposure')
+        return remaining
 
     def get(self, tag):
         row = self.db.execute("SELECT * FROM intents WHERE tag=?", (tag,)).fetchone()

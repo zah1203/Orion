@@ -14,7 +14,7 @@ from .readonly import ProbeFailure, integer, rows
 
 def fingerprint(ledger):
     state = []
-    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts', 'fee_corrections', 'execution_terms', 'execution_attempts', 'broker_commands', 'protection_policy'):
+    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts', 'fee_corrections', 'execution_terms', 'execution_attempts', 'broker_commands', 'protection_policy', 'terminal_history'):
         if ledger.db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
             state.append((table, [dict(r) for r in ledger.db.execute(f'SELECT * FROM {table} ORDER BY 1')]))
     return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -93,6 +93,9 @@ class Reconciliation:
         self.ucc = text_field(ucc)
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS reconciliation_account(ucc TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS terminal_history(
+                broker_id TEXT PRIMARY KEY, observed_day TEXT NOT NULL,
+                observed_at TEXT NOT NULL, body TEXT NOT NULL, evidence_digest TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS reconciliation_instruments(
                 entry_tag TEXT PRIMARY KEY, product TEXT NOT NULL, token TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS reconciliation_state(
@@ -139,9 +142,10 @@ class Reconciliation:
             if not (0 <= (completed_at-started_at).total_seconds() <= 20 and
                     0 <= (now-completed_at).total_seconds() <= 30):
                 raise Refused('Snapshot stale or invalid')
-            broker_orders = normalize_orders(orders, self.ucc)
+            from .history import expand
             broker_positions = normalize_positions(positions, self.ucc)
             with self.ledger.transaction():
+                broker_orders = normalize_orders(expand(self.ledger, orders, completed_at), self.ucc)
                 self._compare(broker_orders, broker_positions)
                 self.db.execute('INSERT OR REPLACE INTO reconciliation_state VALUES(1,?,?,?)',
                                 (self.ledger.session, completed_at.isoformat(), fingerprint(self.ledger)))

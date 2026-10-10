@@ -7,7 +7,7 @@ from .ledger import Refused, amount, positive_int
 
 
 def check_conflicts(db):
-    if db.execute("SELECT 1 FROM live_incidents WHERE code IN ('protective-observation-conflict','protective-outcome-unknown','broker-snapshot-mismatch','fill-history-conflict','broker-command-unknown','broker-observation-conflict')").fetchone():
+    if db.execute("SELECT 1 FROM live_incidents WHERE code IN ('protective-observation-conflict','protective-outcome-unknown','broker-snapshot-mismatch','fill-history-conflict','broker-command-unknown','broker-observation-conflict','history-evidence-conflict')").fetchone():
         raise Refused("Protective reconciliation requires review")
 
 

@@ -107,14 +107,15 @@ class ExecutionHarness:
             # unresolved and prepared intents. Never rely on a stop to cap debit.
             reserved = amount(0)
             reserved_risk = amount(0)
-            for candidate in self.ledger.db.execute("SELECT i.body,i.status,i.filled,t.fee_reserve,t.stop FROM intents i LEFT JOIN execution_terms t ON t.tag=i.tag"):
-                if candidate['status'] in ('REJECTED','CANCELLED') and not candidate['filled']:
+            for candidate in self.ledger.db.execute("SELECT i.tag,i.body,i.status,i.filled,t.fee_reserve,t.stop FROM intents i LEFT JOIN execution_terms t ON t.tag=i.tag"):
+                units = self.ledger.reserved_units(candidate)
+                if not units:
                     continue
                 if candidate['fee_reserve'] is None:
                     raise Refused('Unaccounted reservation')
                 candidate_body = json.loads(candidate['body'])
-                reserved += amount(candidate_body['premium']) + amount(candidate['fee_reserve'])
-                reserved_risk += (amount(candidate_body['limit_price'])-amount(candidate['stop'])) * candidate_body['quantity'] + amount(candidate['fee_reserve'])
+                reserved += amount(candidate_body['limit_price'])*units + amount(candidate['fee_reserve'])
+                reserved_risk += (amount(candidate_body['limit_price'])-amount(candidate['stop'])) * units + amount(candidate['fee_reserve'])
             if reserved > min(amount(self.limits['capital']), amount(self.limits['max_open_premium']), bounded_amount(available_cash)):
                 raise Refused('Reserved premium exceeds available budget')
             trade_risk = (amount(body['limit_price'])-amount(terms['stop'])) * body['quantity'] + amount(terms['fee_reserve'])

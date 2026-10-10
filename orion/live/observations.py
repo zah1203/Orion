@@ -58,8 +58,10 @@ class Observations:
                     not 0 <= (completed_at-started_at).total_seconds() <= 20 or
                     not 0 <= (now-completed_at).total_seconds() <= 30):
                 raise Refused('Fresh broker books required')
-            normalized = normalize_orders(orders, self.ucc)
+            from .history import expand
             with self.ledger.transaction():
+                orders = expand(self.ledger, orders, completed_at)
+                normalized = normalize_orders(orders, self.ucc)
                 seen = set()
                 for entry in self.db.execute('SELECT * FROM intents').fetchall():
                     body = json.loads(entry['body'])
