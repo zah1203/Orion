@@ -80,6 +80,11 @@ class Access(Strict):
     access: Literal["approved", "suspended", "pending"]
 
 
+class LiveReadOnly(Strict):
+    totp: str = Field(pattern=r"^[0-9]{6}$")
+    confirmation: Literal["READ ONLY CHECK"]
+
+
 class Mode(Strict):
     mode: Literal["paper", "live"]
 
@@ -348,7 +353,8 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
         owner(request)
         # Deliberately no broker calls, state initialization or live-mode mutation.
         return {
-            "stage": "offline-foundation", "live_available": False,
+            "stage": "read-only-probe-available", "live_available": False,
+            "read_only_probe_available": True,
             "order_submission_available": False, "pilot_scope": "owner-only",
             "blockers": [
                 "broker-trading-session-and-identity",
@@ -361,6 +367,24 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
                 "supervised-minimum-size-live-validation",
             ],
         }
+
+    @app.post("/api/live/probe")
+    async def live_probe(body: LiveReadOnly, request: Request):
+        from .connections import connection_lease
+        from ..live.probe import run_probe
+        from ..live.readonly import ProbeFailure
+        uid = owner(request, True)
+        connections.limit(uid, "live-readonly", 3)
+        # Refuse active workers; do not pause, restart or replace their saved sessions.
+        with connection_lease(store, uid):
+            creds = store.credentials(uid)
+            required = ("kotak_consumer_key", "kotak_mobile", "kotak_ucc", "kotak_mpin")
+            if not all(creds.get(k) for k in required):
+                raise HTTPException(409, "Save Kotak credentials before the read-only check")
+            try:
+                return await run_probe({k: creds[k] for k in required}, body.totp)
+            except ProbeFailure as exc:
+                raise HTTPException(502, "Read-only broker check failed: " + exc.code) from None
 
     @app.put("/api/mode")
     def mode(body: Mode, request: Request):

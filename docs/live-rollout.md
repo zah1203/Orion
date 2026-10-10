@@ -2,15 +2,16 @@
 
 ## Current status
 
-Stage 1 is an **offline development foundation**. Merging or deploying this PR
+Stage 1 provides the **offline development foundation**; Stage 2 adds an
+owner-triggered read-only broker probe. Merging or deploying this PR
 cannot submit broker orders. The production worker still opens paper.db, the
 Paper/Live API rejects Live, and no runtime imports the new ledger. There is no
-production enable flag, SDK transport, executable live strategy, or order API.
+production enable flag, order-submission transport, executable live strategy, or order API.
 The pending plain-ORION header change is independent of Live availability.
 
 GET /api/live/readiness is authenticated and owner-only. It returns explicit
 blockers and always reports live_available=false and order_submission_available=false.
-It does not contact Kotak or create files. A readiness response is not approval
+The readiness GET does not contact Kotak or create files. A readiness response is not approval
 to trade and does not certify broker connectivity.
 
 ## Audit findings
@@ -97,3 +98,50 @@ No method in this module places, modifies, cancels or closes a broker order.
 
 No AWS resources or production services were changed while developing Stage 1.
 Local/CI tests use synthetic data and do not establish live broker readiness.
+
+
+## Stage 2: owner-triggered read-only probe
+
+POST /api/live/probe requires owner authorization, the normal CSRF/native checks,
+a fresh six-digit `totp` and `confirmation: "READ ONLY CHECK"`. The API accepts
+no credentials or account selector from the request: it uses only that owner's
+saved Kotak credentials. The endpoint is rate-limited to three attempts under the
+existing connection limiter. It acquires the account's broker-auth/worker leases
+and refuses enabled entries or a running worker; it never stops or pauses one.
+There is not yet a mobile UI button for this endpoint. Do not send TOTP codes,
+MPINs or API tokens through GitHub workflow inputs, command arguments or chat.
+
+A fresh subprocess authenticates with totp_login/totp_validate and invokes only
+order_report, positions and limits. Full-session tokens remain in child memory;
+the worker's encrypted feed session and credentials are not replaced. SDK output
+is discarded and cache files are confined to private temporary storage. The
+parent enforces a 60-second timeout, kills/reaps the child on timeout/cancellation
+and validates the summary before returning it. A new broker login can affect
+other broker sessions; run the first real check in a reviewed maintenance window.
+No automated probe runs on startup, merge, readiness GET or backup activation.
+
+The check validates the broker-returned UCC, trade-session marker, HTTPS broker
+routing, error envelopes, numeric fields, order quantities/statuses and matching
+account IDs on nonempty books. Empty successful lists are valid; missing data,
+SDK error dictionaries, mismatched identities and unknown shapes fail closed.
+The read window is limited to 20 seconds. It is not an atomic or continuously
+fresh broker snapshot. Unknown future response variants require a reviewed parser
+update rather than accepting them silently.
+
+Only counts, a locally observed timestamp, identity-match status and RMS Net are
+returned. RMS Net can be negative and is **not cash, approved capital, or a
+validated live risk budget**. No positions, tokens, account numbers or raw SDK
+errors are emitted. A successful probe still reports live_available=false.
+Protective exits, order/position reconciliation and live risk/recovery gates remain.
+The broker approval/static outbound IP check remains a separate operator gate;
+read access does not prove that order placement is permitted.
+
+Validation uses synthetic fixtures shaped after the pinned SDK and official
+portfolio/order documentation; no real brokerage authentication or API read has
+been performed by the implementation agent. Real response compatibility remains
+unverified until an authorized owner runs the probe after deployment.
+
+Stage 2 schema references:
+- https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/orders/order_report.md
+- https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/positions.md
+- https://github.com/Kotak-Neo/kotak-neo-python/blob/main/docs/functions/portfolio/limits.md
