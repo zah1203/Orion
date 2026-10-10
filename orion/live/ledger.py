@@ -98,12 +98,20 @@ class Ledger:
 
     @contextmanager
     def transaction(self):
-        self.db.execute("BEGIN IMMEDIATE")
+        nested = self.db.in_transaction
+        savepoint = 'nested_' + uuid.uuid4().hex
+        self.db.execute('SAVEPOINT ' + savepoint if nested else 'BEGIN IMMEDIATE')
         try:
             yield
-            self.db.commit()
+            if nested:
+                self.db.execute('RELEASE SAVEPOINT ' + savepoint)
+            else:
+                self.db.commit()
         except BaseException:
-            if self.db.in_transaction:
+            if nested:
+                self.db.execute('ROLLBACK TO SAVEPOINT ' + savepoint)
+                self.db.execute('RELEASE SAVEPOINT ' + savepoint)
+            elif self.db.in_transaction:
                 self.db.rollback()
             raise
 

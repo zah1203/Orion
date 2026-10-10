@@ -289,6 +289,52 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "versioning"):
             r.upload(path, "test-bucket", "daily/", s3)
 
+    def test_live_wal_snapshot_and_restore_revokes_pilot(self):
+        from orion.live.ledger import Ledger, Limits, Refused
+        from orion.live.accounting import Accounting
+        from orion.live.pilot import Pilot
+        from datetime import datetime, timezone
+        policy = dict(capital='30000', max_order_premium='2000', max_open_premium='5000',
+                      daily_loss='1000', fee_reserve='10', max_trade_loss='500', max_open_risk='800',
+                      max_lots=1, max_entries=3)
+        pilot = Pilot(self.store)
+        pilot.configure(self.uid, self.uid, policy)
+        pilot.consent(self.uid, 1)
+        live = Ledger(self.store.account_dir(self.uid)/'live.db', self.uid)
+        try:
+            live.db.execute('PRAGMA wal_autocheckpoint=0')
+            live.development_resume()
+            now = datetime.now(timezone.utc)
+            tag = live.reserve(event='test', symbol='TESTCE', segment='nse_fo', lots=1, lot_size=10,
+                limit_price='100', tick_size='.05', signal_time=now, quote_time=now, now=now,
+                limits=Limits(1, 3, 2000, 1000), realized_loss=0)['tag']
+            live.mark_dispatching(tag)
+            live.reconcile(tag, account=self.uid, broker_id='test1', symbol='TESTCE', quantity=10,
+                           status='FILLED', filled=10, average='100')
+            accounting = Accounting(live, 'TESTUCC')
+            accounting.bind_multiplier(tag, 1)
+            accounting.record(account=self.uid, ucc='TESTUCC', trade_id='fill1', broker_id='test1',
+                segment='nse_fo', symbol='TESTCE', side='BUY', quantity=10, price='100', fee='1', executed_at=now)
+            with patch('socket.socket', side_effect=AssertionError('Network forbidden')):
+                archive, manifest = self.backup()
+                restored = self.root/'live-restored'
+                report = r.restore(archive, restored, self.backup_key, self.key, self.work)
+            self.assertEqual(manifest['counts']['live_databases'], 1)
+            self.assertEqual(manifest['counts']['live_fills'], 1)
+            self.assertTrue(report['live_ledgers_unchanged'])
+            self.assertTrue(report['live_reconciliation_required'])
+            self.assertFalse(report['aws_verified'])
+            with sqlite3.connect(restored/'portal/accounts.db') as db:
+                self.assertEqual(db.execute('SELECT enrolled,consent FROM live_pilots').fetchone(), (0, 0))
+            destination = restored/'portal/accounts'/self.uid/'live.db'
+            with self.assertRaises(Refused):
+                Ledger(destination, self.uid)
+            self.assertTrue(pilot.status(self.uid)['reviewed'])
+            self.assertEqual(live.get(tag)['filled'], 10)
+            self.assertEqual(self.engine.state()['positions'], self.positions)
+        finally:
+            live.close()
+
 
 if __name__ == "__main__":
     unittest.main()
