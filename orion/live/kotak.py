@@ -150,6 +150,21 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker snapshot rejected') from None
 
+    def quotes(self, requested):
+        """Account-session-bound depth reads; no market-open assertion or retry."""
+        from .quotes import instruments, normalize_quotes
+        expected = instruments(requested)
+        self._check()
+        try:
+            response = self.client.quotes(instrument_tokens=[dict(exchange_segment='nse_fo', instrument_token=token)
+                                          for token in expected], quote_type='all')
+            self._check()
+            return dict(ucc=self.ucc, quotes=normalize_quotes(response, expected, now=datetime.now(timezone.utc)),
+                        market_open_verified=False, order_submission_available=False)
+        except Exception:
+            self.closed = True
+            raise TransportFailure('Broker quote evidence rejected') from None
+
     def evidence(self):
         """Collect stable books plus trades and RMS fields, without certifying cash.
 

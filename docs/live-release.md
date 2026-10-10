@@ -15,6 +15,18 @@ substitute for an integrated acceptance decision.
   read-only broker check. The second account may probe only after review and uses
   only its own saved credentials. No TOTP is retained in app state after submission.
   A worker lease prevents probing an active paper worker; the endpoint never stops it.
+- Account-bound source admission and a receive-only Telegram worker component.
+  It acquires the shared worker lease before connecting with that account's saved
+  Telegram session, refuses backfill, and invalidates pending candidates on edits,
+  disconnect and restart. Source IDs are durable and changed replays cannot revive
+  candidates. Current server-side policy review and selected channels are checked
+  before staging and again before quote evaluation. There is no broker login or
+  order transport in this worker, and no production service starts it yet.
+- Strict range-signal/quote matching for explicit-expiry NSE index options, with
+  current master, token, unit multiplier, tick, spread and freshness checks. A
+  conservative whole-lot proposal uses that account's reviewed Live limits, never
+  Paper risk/cash settings. It does not reserve capital, subtract existing exposure
+  or establish available funds; every proposal remains blocked from submission.
 - An integrated deterministic simulator joining reservation, pre-dispatch risk,
   durable uncertain outcomes, fill journal, protective exits and reconciliation.
   Dispatch rechecks signal/quote age, daily attempt count, fee/stop-risk budgets,
@@ -87,12 +99,12 @@ No production workers or accounts are changed by developing or merging code.
 | Requirement | Current status | Acceptance evidence |
 | --- | --- | --- |
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
-| Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; entry feed and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending; account wrapper can hand off final exposure to exit management without releasing its lease |
+| Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; receive-only Telegram admission implemented; bounded REST quote reader implemented; trusted market status, combined execution worker and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending; account wrapper can hand off final exposure to exit management without releasing its lease |
 | Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; target/trailing coordinator implemented; production signal policy binding and reviewed gap response still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
 | Multi-day trade/order history and fee corrections | Retained terminal history, bounded current-day trade collection and fee corrections implemented; verified statement import still open | Day rollover, carried positions, absent working orders, archive conflicts and fee corrections tested locally |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
 | Live monitoring, incidents and controlled daily reset | Account/Owner health displays and read-only endpoints implemented; production alert delivery and reviewed incident resolution remain open | Account isolation, stale/corrupt/missing ledger tests; no reset or automatic incident clearing |
-| Production two-account execution routing | Not implemented | Independent sessions/ledgers, no cross-account orders, fresh approval at each boundary |
+| Production two-account execution routing | Account-specific source/policy routing implemented; real execution routing remains open | Independent sessions/ledgers, no cross-account orders, fresh approval at each boundary |
 | Actual AWS live-ledger restore drill | Not performed | Encrypted upload/readback and isolated restore using the deployed recovery build |
 | Supervised real order | Not performed/authorized | Explicit account-owner approval after all previous gates pass |
 
@@ -160,6 +172,50 @@ The production Paper/Live API still returns 409 for Live. There is no environmen
 variable, repository variable, timer or UI button that enables real order submission
 in this draft. No new systemd Live service is installed. No trading behavior changes
 on October 19 merely because that date arrives.
+
+## Source admission boundaries
+
+`SignalRouter` stages original selected-channel messages, using durable IDs and
+SHA-256 digests instead of retaining raw Telegram text. Edited/replied messages
+invalidate an existing candidate. Old backfill is ignored by the worker. A source
+must arrive within 30 seconds of its original timestamp; receipt and quotes must
+be no older than 5 seconds at their respective checks. Duplicate delivery is a
+no-op, including after reopening the ledger; changed content becomes a conflict.
+
+`serve_signals` is a receive-only worker component with no broker authentication,
+order API, history download, sends, login prompts or automatic reconnect. It uses
+only the account's encrypted saved Telegram session and refuses the account slot
+before client construction when Paper or another worker owns it. It requires an
+existing Live ledger; it never creates one as part of Paper startup. A disconnect
+or shutdown invalidates all pending source candidates. Existing orders, positions,
+credentials and Paper files are not reset. No production launcher invokes it.
+
+The initial source component accepts explicit-expiry, complete BUY **range**
+signals for NIFTY/BANKNIFTY NSE options with premium multiplier 1. BTST, commodities,
+missing expiry and above/cross entries are refused. Supporting above/cross signals
+requires an explicit Live slippage/crossing policy; Paper settings are not reused.
+The instrument master must be current and non-synthetic. A future production
+adapter still must establish master/quote provenance rather than accepting caller
+assertions about market-open state or timestamps.
+
+Quote evaluation checks account policy version, review, broker identity binding,
+channel selection, exact token/segment, positive non-crossed quotes, tick alignment,
+entry range, a 2% maximum spread and the 30-minute expiry buffer. Its lot proposal
+is a static policy ceiling only: existing orders, fees, losses and reservations
+must be deducted by the future atomic entry gate. Every result explicitly reports
+that submission is unavailable. No adapter can use this result as permission to
+call `Commands.place`. Verified market status, cash/charges and production entry authorization remain
+release blockers.
+
+`KotakSession.quotes` reads at most 50 explicitly bound NSE option instruments
+through the private process deadline. It validates exact token/segment/symbol,
+broker timestamps no older than 5 seconds, and positive ordered bid/ask depth.
+Malformed, missing or stale responses close the session without retry or raw SDK
+output. Only sanitized best prices and timestamps cross the process boundary.
+The pinned SDK quote schema has no market-open assertion; the result explicitly
+reports `market_open_verified=False` and cannot authorize an entry. Synthetic SDK
+and private-process tests validate this reader locally; actual derivative quote
+responses and broker market-status semantics have not been verified.
 
 ## Target/trailing coordination boundaries
 
