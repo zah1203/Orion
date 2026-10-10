@@ -508,3 +508,36 @@ broker responses. Completing the following code and acceptance work is required:
 A merge, green CI run, backup success or target date does not satisfy these gates.
 There is no activation environment variable or locally asserted `verified=True`
 shortcut. The `/api/mode` Live rejection remains in place.
+
+
+## Reviewed startup handoff and durable command boundaries
+
+`serve_reviewed_account` integrates the combined worker with one explicitly
+supplied, in-memory TOTP and the exact reviewed policy version. It acquires the
+shared Paper/Live worker lease and validates the existing private Live ledger
+before login. Saved UCC, ledger UCC, approved account and reviewed enrollment must
+agree; an older version cannot authorize startup. It rechecks policy, credentials
+and returned session identity after the bounded login before handing off to the
+worker. Failed or occupied startup consumes/discards the code; retries require a
+new explicit invocation. No credential, TOTP or session token is persisted by this
+handoff. Clearing Python references is not a guarantee of zeroed string memory.
+
+The resulting `ProtectiveSession` permits reads, cancellations and STOP/EXIT
+placements through the existing journal, but rejects ENTRY placement before it
+reaches the broker process. This starts existing-exposure management only, not
+real-money entry trading. Once running, source withdrawal does not abandon
+existing protective management. A reviewed startup must be specifically chosen
+by the operator; no portal endpoint, supervisor, service or deployment workflow
+invokes it in this draft. It was tested with fake sessions only.
+
+Broker `Commands.place` and `Commands.cancel` now refuse calls made inside an
+existing SQLite transaction. A released savepoint cannot guarantee durability:
+an outer rollback could otherwise erase the journal after sending an order.
+Tests use an independent database connection during the fake network call to
+prove that the SENDING record, entry dispatch and execution attempt are already
+committed. Production entry integration must commit authorization and reservation
+before entering this command boundary, then recheck current authorization before
+handoff; it must never wrap network I/O inside the reservation transaction.
+
+These changes do not complete the production BUY gate, cash/charge adapters,
+service deployment or real broker/AWS acceptance.

@@ -97,3 +97,46 @@ class ExposureWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.sdk.stops[0]['trnsTp'],'S')
         self.assertEqual(self.session.sdk.stops[0]['qty'],3)
         self.assertEqual(self.ledger.db.execute('SELECT COUNT(*) FROM intents').fetchone()[0],1)
+
+class ReviewedWorkerTests(unittest.IsolatedAsyncioTestCase):
+    setUp = routing.RoutingTests.setUp
+    tearDown = routing.RoutingTests.tearDown
+
+    async def test_reviewed_startup_runs_combined_worker_with_one_account_session(self):
+        from orion.live.worker import serve_reviewed_account
+        stop=asyncio.Event()
+        calls=[]
+        class Session:
+            ucc='TESTOWNER'
+            def request(self,operation,**kwargs):
+                calls.append(operation)
+                if len(calls)>=3: stop.set()
+                now=datetime.now(timezone.utc).isoformat()
+                return dict(ucc=self.ucc,orders=[],positions=[],trades=[],fees_verified=False,
+                    available_cash_verified=False,started_at=now,completed_at=now)
+            def close(self): calls.append('close')
+        class Client:
+            def add_event_handler(self,*args): pass
+            async def connect(self): pass
+            async def is_user_authorized(self): return True
+            async def run_until_disconnected(self): await stop.wait()
+            async def disconnect(self): pass
+        factory=Mock(return_value=Session())
+        await asyncio.wait_for(serve_reviewed_account(self.store,self.owner,lambda:self.master,
+            policy_version=1,totp='123456',stop=stop,poll_seconds=.01,
+            _session_factory=factory,_client_factory=lambda _:Client()),timeout=3)
+        self.assertEqual(factory.call_count,1)
+        self.assertEqual(factory.call_args.args[0]['kotak_ucc'],'TESTOWNER')
+        self.assertEqual(calls,['evidence','evidence','evidence','close'])
+        state=self.ledgers[self.owner].db.execute('SELECT * FROM live_worker_health').fetchone()
+        self.assertEqual(state['monitor_state'],'observed')
+        self.assertEqual(state['stopped'],1)
+        self.assertFalse(self.ledgers[self.owner].db.execute('SELECT 1 FROM intents').fetchone())
+
+    async def test_stop_before_start_never_authenticates(self):
+        from orion.live.worker import serve_reviewed_account
+        stop=asyncio.Event(); stop.set()
+        factory=Mock()
+        await serve_reviewed_account(self.store,self.owner,lambda:self.master,
+            policy_version=1,totp='123456',stop=stop,_session_factory=factory)
+        factory.assert_not_called()

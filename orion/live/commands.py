@@ -36,6 +36,7 @@ class Commands:
 
     def place(self, kind, tag, *, stop_limit=None):
         """No PREPARED -> dispatch transition here; acceptance is not a fill."""
+        self._require_committed_boundary()
         with self.ledger.transaction():
             table, row = self._row(kind, tag)
             if row['status'] != 'DISPATCHING' or row['broker_id']:
@@ -78,6 +79,7 @@ class Commands:
         return self._send(kind, tag, 'place', command, table)
 
     def cancel(self, kind, tag):
+        self._require_committed_boundary()
         with self.ledger.transaction():
             table, row = self._row(kind, tag)
             if row['status'] not in ('OPEN', 'PARTIAL') or not row['broker_id']:
@@ -88,6 +90,12 @@ class Commands:
             # blocks entry until a terminal broker observation confirms outcome.
             self.ledger.pause()
         return self._send(kind, tag, 'cancel', command, table)
+
+    def _require_committed_boundary(self):
+        # Releasing a nested savepoint is not a durable commit. Never let an
+        # enclosing caller roll back the journal after a broker sees the order.
+        if self.db.in_transaction:
+            raise Refused('Broker handoff requires a committed transaction boundary')
 
     def _record(self, kind, tag, operation, request):
         row = self.db.execute('SELECT ucc FROM reconciliation_account').fetchone()
@@ -119,6 +127,7 @@ class Commands:
             self.db.execute("UPDATE broker_commands SET status='CONFIRMED' WHERE kind=? AND tag=? AND operation=?", (kind, tag, operation))
 
     def _send(self, kind, tag, operation, command, table):
+        self._require_committed_boundary()
         try:
             result = self.session.request(operation, **command)
             from .kotak import acknowledgement

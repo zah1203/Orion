@@ -129,3 +129,45 @@ class CommandTests(unittest.TestCase):
         with self.assertRaises(Refused): self.commands.place('ENTRY', self.tag)
         self.assertFalse(self.session.sdk.calls)
         self.assertFalse(self.ledger.db.execute('SELECT 1 FROM broker_commands').fetchone())
+
+    def test_outer_transaction_cannot_send_and_then_erase_entry_journal(self):
+        self.committed()
+        with self.assertRaisesRegex(Refused, 'committed transaction boundary'):
+            with self.ledger.transaction():
+                self.commands.place('ENTRY', self.tag)
+        self.assertFalse(self.session.sdk.calls)
+        self.assertFalse(self.ledger.db.execute('SELECT 1 FROM broker_commands').fetchone())
+        self.assertEqual(self.ledger.get(self.tag)['status'],'DISPATCHING')
+
+    def test_outer_transaction_cannot_send_cancellation(self):
+        self.committed()
+        self.commands.place('ENTRY',self.tag)
+        self.observe()
+        self.commands.confirm('ENTRY',self.tag,'place')
+        with self.assertRaisesRegex(Refused, 'committed transaction boundary'):
+            with self.ledger.transaction():
+                self.commands.cancel('ENTRY',self.tag)
+        self.assertEqual(len(self.session.sdk.calls),1)
+        self.assertFalse(self.ledger.db.execute("SELECT 1 FROM broker_commands WHERE operation='cancel'").fetchone())
+        self.assertEqual(self.ledger.get(self.tag)['status'],'OPEN')
+
+    def test_separate_connection_sees_sending_journal_before_each_network_call(self):
+        import sqlite3
+        original=self.session.request
+        seen=[]
+        def request(operation,**args):
+            with sqlite3.connect(self.path) as db:
+                row=db.execute("SELECT status FROM broker_commands WHERE operation=?",(operation,)).fetchone()
+                self.assertEqual(row,('SENDING',))
+                if operation=='place':
+                    self.assertEqual(db.execute('SELECT status FROM intents WHERE tag=?',(self.tag,)).fetchone(),('DISPATCHING',))
+                    self.assertTrue(db.execute('SELECT 1 FROM execution_attempts WHERE tag=?',(self.tag,)).fetchone())
+            seen.append(operation)
+            return original(operation,**args)
+        self.session.request=request
+        self.committed()
+        self.commands.place('ENTRY',self.tag)
+        self.observe()
+        self.commands.confirm('ENTRY',self.tag,'place')
+        self.commands.cancel('ENTRY',self.tag)
+        self.assertEqual(seen,['place','cancel'])

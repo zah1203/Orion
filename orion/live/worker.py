@@ -15,7 +15,7 @@ from .source import receive_signals, telegram_client
 
 async def serve_account(store, uid, master_provider, session_factory, *, stop,
                         strategy=False, collect_trades=True, poll_seconds=2,
-                        _client_factory=telegram_client):
+                        _client_factory=telegram_client, _monitor_factory=AccountMonitor):
     """Share one lease/ledger/session; source loss never abandons exposure.
 
     Broker calls are serialized on the ledger-owning thread. The bounded session
@@ -26,7 +26,7 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
         raise Refused('Bounded monitoring interval required')
     if stop.is_set():
         return
-    with AccountMonitor(store,uid,session_factory,strategy=strategy,collect_trades=collect_trades) as account:
+    with _monitor_factory(store,uid,session_factory,strategy=strategy,collect_trades=collect_trades) as account:
         account.ledger.pause()
         db = account.ledger.db
         db.execute('''CREATE TABLE IF NOT EXISTS live_worker_health(
@@ -82,3 +82,24 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
                 await asyncio.gather(source,return_exceptions=True)
             source_state = 'stopped'
             health(stopped=True)
+
+
+async def serve_reviewed_account(store, uid, master_provider, *, policy_version,
+                                 totp, stop, strategy=False, poll_seconds=2,
+                                 _session_factory=None, _client_factory=telegram_client):
+    """Explicit one-shot reviewed startup; no BUY capability or service install.
+
+    The caller supplies a current code in memory. No credentials in process arguments,
+    environment variables, files or persistent worker configuration.
+    """
+    from .session import ProcessSession
+    from .startup import ReviewedAccountMonitor
+    monitor = ReviewedAccountMonitor(store,uid,policy_version,totp,strategy=strategy,
+        collect_trades=True,_session_factory=_session_factory or ProcessSession)
+    totp = None
+    try:
+        await serve_account(store,uid,master_provider,None,stop=stop,strategy=strategy,
+            collect_trades=True,poll_seconds=poll_seconds,_client_factory=_client_factory,
+            _monitor_factory=lambda *args, **kwargs: monitor)
+    finally:
+        monitor._totp = None
