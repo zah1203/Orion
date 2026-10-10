@@ -130,6 +130,14 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
     setUp = RoutingTests.setUp
     tearDown = RoutingTests.tearDown
 
+    async def test_default_client_disables_implicit_connection_retries(self):
+        from unittest.mock import patch
+        from orion.live.source import telegram_client
+        with patch('telethon.TelegramClient') as client, patch('telethon.sessions.StringSession'):
+            telegram_client(dict(telegram_session='synthetic',telegram_api_id=1,telegram_api_hash='synthetic'))
+        self.assertFalse(client.call_args.kwargs['auto_reconnect'])
+        self.assertEqual(client.call_args.kwargs['connection_retries'], 0)
+
     async def test_busy_paper_slot_refuses_before_client_creation(self):
         import asyncio
         import fcntl

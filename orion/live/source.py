@@ -19,7 +19,8 @@ def telegram_client(credentials):
     if not all(credentials.get(k) for k in ('telegram_session','telegram_api_id','telegram_api_hash')):
         raise Refused('Saved Telegram authorization required')
     return TelegramClient(StringSession(credentials['telegram_session']),
-                          int(credentials['telegram_api_id']), credentials['telegram_api_hash'])
+                          int(credentials['telegram_api_id']), credentials['telegram_api_hash'],
+                          auto_reconnect=False, connection_retries=0)
 
 
 async def serve_signals(store, uid, master_provider, *, stop, _client_factory=telegram_client):
