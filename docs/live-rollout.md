@@ -4,7 +4,7 @@
 
 Stage 1 provides the **offline development foundation**; Stage 2 adds an
 owner-triggered read-only broker probe; Stage 3 adds an offline protective-exit
-protocol. Merging or deploying this PR
+protocol; Stage 4 adds offline broker-book comparisons. Merging or deploying this PR
 cannot submit broker orders. The production worker still opens paper.db, the
 Paper/Live API rejects Live, and no runtime imports the new ledger. There is no
 production enable flag, order-submission transport, executable live strategy, or order API.
@@ -189,3 +189,53 @@ snapshots, external order/position detection, fees and daily risk accounting,
 working-entry protection, product and stop-order validation, broker transport,
 production controls and live-ledger backup support. No AWS operation, real broker
 read/order, deployment or worker restart was performed for this stage.
+
+## Stage 4: offline broker-book reconciliation
+
+`orion/live/reconciliation.py` parses Kotak-shaped order/position fixtures and
+compares them with the development ledger in one SQLite transaction. It makes
+no network calls and is not connected to the probe endpoint or a worker.
+The fixture parser uses documented raw fields (`nOrdNo`, `actId`, `exSeg`,
+`prod`, `tok`, `trdSym`, quantities, prices and order state). Net positions use
+carry-forward plus fresh buys minus sells; SDK-computed P&L and netQty are not
+trusted. Unknown states, errors, duplicates and incomplete shapes fail closed.
+
+The comparison checks the exact set of already-bound broker order IDs, order
+side, product/token/instrument, quantity, cumulative fills and state. Entry
+limit/average prices and protective trigger/type are also compared. Position
+quantities are summed across local entry and exit fills. External orders,
+unexpected shorts and position discrepancies block new entries. Missing orders
+are never considered cancelled/rejected; ambiguous DISPATCHING/UNKNOWN orders
+cannot be resolved by this comparator. CANCEL_PENDING remains unresolved until
+an explicit observation updates the ledger. Comparison does not import orders,
+update fills or reconcile individual trade IDs.
+
+The development harness must bind a UCC to the ledger and supply immutable
+product/token metadata per entry. These are fixture assertions, not verified
+contract catalogue data. No tag-to-order binding is inferred. Before production,
+a trusted adapter must bind metadata before submission, collect complete books,
+verify account/session identity and resolve pagination/truncation. The supplied
+`complete=True` flag and collection timestamps are **not proof** of completeness
+or an atomic broker snapshot. Actual SDK response compatibility is unverified.
+
+Collection must take at most 20 seconds and completion must be within 30 seconds.
+After reconciliation is installed on a development ledger, resume, new reservation
+and dispatch require a matching snapshot from that ledger connection. Any change
+to intents, exits or instrument bindings invalidates it. Reopening the ledger
+requires another comparison, including after a crash. Reserving an intent also
+invalidates the snapshot, so bind its metadata and compare again before simulated
+dispatch. A match does not resume entries or clear earlier incidents. A failed
+comparison invalidates the previous snapshot, persists a redacted blocked audit
+record, pauses entries and latches `broker-snapshot-mismatch`; this also blocks
+protective replacement preparation/dispatch pending review.
+
+This conservative stage requires **all locally bound order IDs** in the supplied
+book, including historical terminal orders. A daily broker book that omits them
+will block; multi-day history/trade reconciliation is still required. Other
+remaining gates include fill IDs, working-entry protection, stop-limit price and
+execution guarantees, fees/daily risk, production integration and live-ledger
+backup/restore. A matched snapshot is not evidence of sufficient stop protection
+or approved capital. There is no production incident-clear operation.
+
+Validation is local/CI using synthetic fixtures; no brokerage login, real order,
+AWS operation or production restart is part of Stage 4. Live remains disabled.

@@ -32,7 +32,7 @@ class Protection:
             self.db.execute("UPDATE control SET paused=1 WHERE id=1")
 
     def _check_conflicts(self):
-        if self.db.execute("SELECT 1 FROM live_incidents WHERE code IN ('protective-observation-conflict','protective-outcome-unknown')").fetchone():
+        if self.db.execute("SELECT 1 FROM live_incidents WHERE code IN ('protective-observation-conflict','protective-outcome-unknown','broker-snapshot-mismatch')").fetchone():
             raise Refused("Protective reconciliation requires review")
 
     def get(self, tag):
