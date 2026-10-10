@@ -101,6 +101,22 @@
               }
             },
             {
+              "Sid": "ValidateRecoverySecretEncryption",
+              "Effect": "Allow",
+              "Action": [
+                "kms:GenerateDataKey"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:kms:ap-south-1:${AWS::AccountId}:key/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:ResourceTag/Purpose": "orion-recovery",
+                  "kms:ViaService": "secretsmanager.ap-south-1.amazonaws.com"
+                }
+              }
+            },
+            {
               "Sid": "RuntimeBackupPolicies",
               "Effect": "Allow",
               "Action": [

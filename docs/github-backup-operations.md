@@ -214,3 +214,24 @@ and source-only installer behavior. CI exercises recovery in an actual network
 namespace and validates both Terraform stacks. Infrastructure operations are
 mocked locally; CI success does not prove live AWS IAM, SSM, key escrow or backup
 activation. Record the actual successful workflow evidence after deployment.
+
+## Recover from a partial apply: KMS access denied
+
+If CreateSecret fails with "Access to KMS is not allowed", the original
+permission template omitted kms:GenerateDataKey. Secrets Manager validates both
+GenerateDataKey and Decrypt access even when creating an empty key container.
+
+After merging the permission fix:
+1. Run **Prepare backup permissions** from main to publish the updated template.
+2. In Mumbai CloudFormation, select the existing
+   **orion-github-recovery-permissions** stack, choose **Update stack → Replace
+   current template**, and supply the new S3 template URL. Keep existing parameters,
+   review the IAM change and wait for **UPDATE_COMPLETE**.
+3. Run **Backup infrastructure → plan** again. Inspect the refreshed plan; it
+   should retain resources already created and add the missing secret containers.
+4. Apply that new plan using its own plan_key and plan_sha256.
+5. Proceed with **Backup operations → activate** only after apply succeeds.
+
+Do not delete the bucket/KMS key, recreate the permission stack or reuse the old
+saved plan. Terraform records successful resources from a partial apply in remote
+state. This permission repair alone does not activate backups.
