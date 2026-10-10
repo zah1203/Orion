@@ -18,6 +18,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_safe_failure_reasons_never_expose_private_values(self):
+        for exc, expected in [
+            (ValueError("Unknown file in portal state; review inventory"),
+             "unknown-file-in-portal-state-review-inventory"),
+            (ValueError("private credential"), "unknown"),
+            (FileNotFoundError("private path"), "missing-file"),
+            (sqlite3.OperationalError("no such table: private_name"), "sqlite-schema"),
+            (InvalidToken("private ciphertext"), "invalid-ciphertext"),
+        ]:
+            self.assertEqual(r.safe_reason(exc), expected)
+        from scripts.backup_host import SAFE_REASONS
+        self.assertTrue(set(r.SAFE_REASONS.values()).issubset(SAFE_REASONS))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
