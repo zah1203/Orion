@@ -42,6 +42,18 @@ class PortalTests(unittest.TestCase):
     def post(self, path, body):
         return self.client.post(path, json=body, headers=self.headers)
 
+    def test_live_readiness_is_owner_only_and_never_enables_orders(self):
+        self.assertEqual(self.client.get("/api/live/readiness").status_code, 403)
+        self.store.bootstrap_owner("alice")
+        response = self.client.get("/api/live/readiness")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["live_available"])
+        self.assertFalse(response.json()["order_submission_available"])
+        self.assertTrue(response.json()["blockers"])
+        denied = self.client.put("/api/mode", json={"mode": "live"}, headers=self.headers)
+        self.assertEqual(denied.status_code, 409)
+        self.assertFalse(list(Path(self.tmp.name).rglob("live.db")))
+
     def test_registration_isolated_paused_paper_account(self):
         body = {"username": "new-user", "password": PASSWORD}
         self.assertEqual(self.post("/api/register", body).status_code, 201)
