@@ -142,7 +142,7 @@ class ExitStrategy(ProtectionMonitor):
                 quote = marks.get(entry['tag'])
                 fresh = False
                 if isinstance(quote, tuple) and len(quote) == 2:
-                    fresh = 0 <= (now-timestamp(quote[1])).total_seconds() <= 30
+                    fresh = 0 <= (now-timestamp(quote[1])).total_seconds() <= 5
                     price = amount(quote[0])
                     fresh = fresh and price > 0
                 if fresh and any(r['status'] in ('OPEN','PARTIAL') and price <= amount(r['trigger'])-amount(plan['stop_gap']) for r in stops):

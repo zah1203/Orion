@@ -329,3 +329,21 @@ After the code requirements above are closed and CI passes on the final commit:
 Do not roll back to a recovery build that rejects or omits existing live ledgers.
 Never replace a running live ledger with a restored backup: preserve broker history,
 reconcile all unknown outcomes and positions, and keep recovered copies quarantined.
+
+## Broker-bound exit marks
+
+`AccountMonitor.cycle_from_broker` connects the leased account's exit coordinator
+to the bounded quote reader. It derives requests from existing filled exposure
+and immutable ledger instrument bindings, validates the returned broker identity,
+segment, token, symbol and tick, and uses the best bid for long-option exits.
+It never substitutes the ask or last trade. Closed exposure requires no quote.
+The strategy rechecks the five-second freshness limit after collecting broker
+books, so a slow book read cannot reuse an expired target signal.
+
+Quote collection failure pauses entry permission and records `broker-quote-failed`
+health; it sends no command in that cycle. Existing broker stops remain in place.
+This is an integration component, not an installed production worker. The caller
+can still perform a book/protection cycle without marks; it must not invent or
+reuse prices after a quote failure. Tests use synthetic broker books and quotes,
+including wrong-account responses and quote aging during book collection. Actual
+broker acceptance, market status, entry cash/fees and activation remain pending.

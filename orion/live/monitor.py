@@ -172,6 +172,20 @@ class AccountMonitor:
             manager.bind(entry_tag, targets=targets, stop_limit=stop_limit, target_timeout=target_timeout)
             self.monitor, self.strategy = manager, True
 
+    def cycle_from_broker(self):
+        """Use bound broker bids for existing exits; no entry authorization."""
+        if self.ledger is None or self.session is None or not self.strategy:
+            raise Refused('Leased strategy worker required')
+        from .marks import collect_marks
+        with self.store.lock(self.uid):
+            try:
+                marks = collect_marks(self.ledger, self.session)
+            except Exception:
+                self.ledger.pause()
+                self.monitor._health('review-required', 'broker-quote-failed')
+                raise Refused('Broker exit quotes require review') from None
+            return self.monitor.cycle(marks=marks)
+
     def cycle(self, *, marks=None):
         if self.ledger is None:
             raise Refused('Account worker lease required')
