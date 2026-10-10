@@ -35,7 +35,7 @@ def integer(value):
 
 
 def envelope(value):
-    if not isinstance(value, dict) or any(k.lower() in ('error', 'errors', 'error message') for k in value):
+    if not isinstance(value, dict) or any(not isinstance(k, str) or k.lower() in ('error', 'errors', 'error message') for k in value):
         raise ProbeFailure('broker-response')
     if str(value.get('stat', '')).lower() != 'ok' or value.get('stCode') != 200:
         raise ProbeFailure('broker-response')
@@ -50,7 +50,7 @@ def rows(value):
 
 
 def auth(value):
-    if not isinstance(value, dict) or any(k.lower() in ('error', 'errors', 'error message') for k in value):
+    if not isinstance(value, dict) or any(not isinstance(k, str) or k.lower() in ('error', 'errors', 'error message') for k in value):
         raise ProbeFailure('authentication')
     data = value.get('data')
     if not isinstance(data, dict) or data.get('status') != 'success':

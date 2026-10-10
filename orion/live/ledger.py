@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import uuid
 
 
 class Refused(ValueError):
@@ -74,6 +75,7 @@ class Ledger:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.account = account
+        self.session = uuid.uuid4().hex
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS metadata(account TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS live_incidents(code TEXT PRIMARY KEY);
@@ -110,6 +112,9 @@ class Ledger:
         self.db.execute("UPDATE control SET paused=1 WHERE id=1")
 
     def _check_incidents(self):
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='reconciliation_state'").fetchone():
+            from .reconciliation import require_current
+            require_current(self)
         if self.db.execute("SELECT 1 FROM live_incidents LIMIT 1").fetchone():
             raise Refused("Live incident requires review")
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='protective_exits'").fetchone():
