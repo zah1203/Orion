@@ -29,6 +29,7 @@ def account_status(root, uid, *, now=None):
     result = dict(state='not-started', fresh=False, checked_at=None, exposure=None,
                   uncovered=None, pending_commands=None, incident_count=None,
                   unverified_fee_fills=None, live_available=False,
+                  pending_alerts=None, uncertain_alerts=None,
                   order_submission_available=False)
     if not isinstance(uid, str) or not re.fullmatch(r'[a-f0-9]{32}', uid):
         raise ValueError('Invalid account ID')
@@ -56,6 +57,10 @@ def account_status(root, uid, *, now=None):
             pending = db.execute("SELECT COUNT(*) FROM broker_commands WHERE status!='CONFIRMED'").fetchone()[0] if 'broker_commands' in names else 0
             fees = db.execute("SELECT COUNT(*) FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone()[0] if 'broker_fill_evidence' in names else 0
             result.update(incident_count=incidents, pending_commands=pending, unverified_fee_fills=fees)
+            if 'live_alerts' in names:
+                result.update(
+                    pending_alerts=db.execute("SELECT COUNT(*) FROM live_alerts WHERE status='PENDING'").fetchone()[0],
+                    uncertain_alerts=db.execute("SELECT COUNT(*) FROM live_alerts WHERE status IN ('SENDING','UNKNOWN')").fetchone()[0])
             row = db.execute('SELECT * FROM live_monitor WHERE id=1').fetchone() if 'live_monitor' in names else None
             if not row:
                 return result | dict(state='not-checked')

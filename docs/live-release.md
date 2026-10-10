@@ -379,3 +379,27 @@ therefore needs a separately provisioned test account/environment or an agreed
 account handover window. The current deployment restarts workers, so do not run
 it while uninterrupted Paper observation is required. No such deployment or
 broker session was performed as part of this change.
+
+## Durable incident notification journal
+
+Live ledgers now journal incident creation in the same SQLite transaction through
+an insert trigger. Existing incidents are backfilled on ledger upgrade. Repeated
+inserts of the same active incident do not create duplicate notifications. Monitor
+health also journals transitions to uncovered exposure or review-required state;
+repeated identical health does not flood the queue. Health changes and their alert
+records commit together.
+
+`AlertJournal` is account-bound and contains no network sender. A delivery claim
+commits before returning an event; callers cannot claim inside an outer transaction.
+Only a positive sender acknowledgement should finish a claim as DELIVERED. A send
+failure or ambiguous result is UNKNOWN; a crash can leave SENDING. Neither is
+retried automatically. A future delivery/review workflow must resolve those states
+without blindly duplicating messages. Acknowledging a notification never deletes
+an incident, changes a position, or resumes entries.
+
+Read-only Account/Owner health responses include `pending_alerts` and
+`uncertain_alerts` counts without notification contents or recipient credentials.
+The journal is included in normal SQLite backups. No delivery endpoint, recipient
+configuration or production sender is enabled by this change; actual alert delivery
+and reviewed incident resolution remain release blockers. Tests cover transaction
+rollback, restart, uncertain outcomes, account binding and competing claims.

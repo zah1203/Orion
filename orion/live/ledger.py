@@ -93,6 +93,8 @@ class Ledger:
                 raise Refused("Account mismatch")
             if not row:
                 self.db.execute("INSERT INTO metadata VALUES(?)", (account,))
+            from .alerts import install
+            install(self.db)
 
     def close(self):
         self.db.close()

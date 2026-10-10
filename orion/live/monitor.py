@@ -63,8 +63,11 @@ class ProtectionMonitor:
             # ACK/PREPARED/DISPATCHING/UNKNOWN are never counted as protection.
             protected = sum(r['quantity']-r['filled'] for r in exits if r['status'] in ('OPEN','PARTIAL') and amount(r['trigger']) > 0)
             uncovered += max(0, remaining-protected)
-        self.db.execute('INSERT OR REPLACE INTO live_monitor VALUES(1,?,?,?,?,?)',
-                        (datetime.now(timezone.utc).isoformat(), state, exposure, uncovered, action))
+        from .alerts import health_event
+        with self.ledger.transaction():
+            self.db.execute('INSERT OR REPLACE INTO live_monitor VALUES(1,?,?,?,?,?)',
+                            (datetime.now(timezone.utc).isoformat(), state, exposure, uncovered, action))
+            health_event(self.ledger, state, uncovered)
         return self.health()
 
     def cycle(self, *, entries_allowed=False):
