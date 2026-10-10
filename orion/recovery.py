@@ -140,7 +140,7 @@ def inventory(portal, runtime, config):
         if path.is_dir():
             if rel.parts[0].startswith("catalogue-refresh-"):
                 continue
-            if rel == Path("accounts") or (len(rel.parts) == 2 and rel.parts[0] == "accounts" and UID.fullmatch(rel.name)):
+            if rel in (Path("accounts"), Path("broker-exports")) or (len(rel.parts) == 2 and rel.parts[0] == "accounts" and UID.fullmatch(rel.name)):
                 continue
             raise ValueError("Unknown directory in portal state; review inventory")
         if rel.parts[0].startswith("catalogue-refresh-"):
@@ -148,6 +148,10 @@ def inventory(portal, runtime, config):
         if rel.name.endswith((".lock", "-wal", "-shm", "-journal")):
             continue
         allowed = str(rel) in ("accounts.db", "key-check", "contracts.json", "economics.json")
+        allowed |= len(rel.parts) == 1 and bool(re.fullmatch(
+            r"(?:contracts\.backup-\d{8}-\d{6}\.json|economics-\d{4}-\d{2}-\d{2}\.json)", rel.name))
+        allowed |= len(rel.parts) == 2 and rel.parts[0] == "broker-exports" and bool(re.fullmatch(
+            r"(?:nse_fo|mcx_fo)\.csv(?:\.receipt\.json)?", rel.name))
         allowed |= len(rel.parts) == 3 and rel.parts[0] == "accounts" and bool(UID.fullmatch(rel.parts[1])) and rel.name == "paper.db"
         if not allowed:
             raise ValueError("Unknown file in portal state; review inventory")
