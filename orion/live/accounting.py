@@ -42,6 +42,10 @@ class Accounting:
                 quantity INTEGER NOT NULL, price TEXT NOT NULL, fee TEXT NOT NULL,
                 executed_at TEXT NOT NULL,
                 PRIMARY KEY(segment,trade_day,trade_id));
+            CREATE TABLE IF NOT EXISTS fee_corrections(
+                source_ref TEXT NOT NULL, segment TEXT NOT NULL, trade_day TEXT NOT NULL,
+                trade_id TEXT NOT NULL, total_fee TEXT NOT NULL, reported_at TEXT NOT NULL,
+                PRIMARY KEY(source_ref,segment,trade_day,trade_id));
         ''')
         with ledger.transaction():
             for table in ('fill_account', 'reconciliation_account'):
@@ -126,6 +130,43 @@ class Accounting:
                 self.db.execute('UPDATE control SET paused=1 WHERE id=1')
             raise
 
+    def correct_fee(self, *, account, ucc, source_ref, segment, trade_day, trade_id,
+                    total_fee, reported_at):
+        """Append a reviewed fee total without rewriting immutable trade evidence.
+
+        Input remains an offline assertion until a statement adapter is verified.
+        Source references are opaque non-secret IDs, not documents or credentials.
+        Reports must advance in time; replaying a changed report is a conflict.
+        """
+        try:
+            if account != self.ledger.account or ucc != self.ucc:
+                raise Refused('Fee correction account mismatch')
+            text_field(source_ref); text_field(trade_id)
+            fee = bounded_amount(total_fee)
+            at = timestamp(reported_at)
+            if at > datetime.now(timezone.utc):
+                raise Refused('Future fee report')
+            values = (source_ref, segment, trade_day, trade_id, str(fee.normalize()), at.isoformat())
+            with self.ledger.transaction():
+                fill = self.db.execute('SELECT executed_at FROM fill_history WHERE segment=? AND trade_day=? AND trade_id=?', (segment, trade_day, trade_id)).fetchone()
+                if not fill or at < datetime.fromisoformat(fill[0]):
+                    raise Refused('Known fill preceding fee report required')
+                previous = self.db.execute('SELECT * FROM fee_corrections WHERE source_ref=? AND segment=? AND trade_day=? AND trade_id=?', values[:4]).fetchone()
+                if previous:
+                    if tuple(previous) != values:
+                        raise Refused('Fee report changed')
+                    return False
+                latest = self.db.execute('SELECT MAX(reported_at) FROM fee_corrections WHERE segment=? AND trade_day=? AND trade_id=?', (segment, trade_day, trade_id)).fetchone()[0]
+                if latest and at <= datetime.fromisoformat(latest):
+                    raise Refused('Fee report is not newer')
+                self.db.execute('INSERT INTO fee_corrections VALUES(?,?,?,?,?,?)', values)
+            return True
+        except Refused:
+            with self.ledger.transaction():
+                self.db.execute("INSERT OR IGNORE INTO live_incidents VALUES('fill-history-conflict')")
+                self.ledger.pause()
+            raise
+
     def summary(self, *, now, marks):
         """Per-entry FIFO attribution; conservative loss versus acquisition cost.
 
@@ -166,7 +207,11 @@ class Accounting:
                 multiplier = amount(row[0])
                 queue = lots.setdefault(tag, deque())
                 if fill['trade_day'] == day:
-                    fees += amount(fill['fee'])
+                    correction = self.db.execute('''SELECT total_fee FROM fee_corrections
+                        WHERE segment=? AND trade_day=? AND trade_id=? AND reported_at<=?
+                        ORDER BY reported_at DESC LIMIT 1''',
+                        (fill['segment'], fill['trade_day'], fill['trade_id'], now.isoformat())).fetchone()
+                    fees += amount(correction[0] if correction else fill['fee'])
                 if fill['side'] == 'BUY':
                     first_entry_days.setdefault(tag, fill['trade_day'])
                     queue.append([fill['quantity'], amount(fill['price']), multiplier])

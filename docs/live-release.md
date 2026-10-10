@@ -34,6 +34,15 @@ substitute for an integrated acceptance decision.
   limits must match. A conflicting batch rolls back and leaves a durable incident.
   Additional confirmed entry lots can receive disjoint protective stops without
   cancelling existing protection; unknown stops and cancels retain sell capacity.
+- A protection-monitor worker component combining those pieces: fresh book ingestion,
+  one-shot cancellation of a partially filled entry's remainder, explicit stop-limit
+  placement for confirmed lots, late-fill coverage and durable health counts. It
+  never submits a BUY. The account wrapper acquires the existing worker lease before
+  calling its session factory, so an active Paper worker cannot be displaced or
+  subjected to a competing login. No production launcher constructs it yet.
+- Append-only, account-bound fee corrections with opaque statement references,
+  idempotent replay, time ordering and as-of accounting. Original fill evidence is
+  unchanged. Broker statement import and verification of actual charges remain open.
 - Online `live.db` backup through the SQLite backup API, including committed WAL
   data. Archive verification checks account binding and integrity. Isolated restore
   preserves paper/live ledger bytes, revokes pilot enrollment and writes the recovery
@@ -48,9 +57,9 @@ No production workers or accounts are changed by developing or merging code.
 | Requirement | Current status | Acceptance evidence |
 | --- | --- | --- |
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
-| Telegram/quote Live worker and lease/supervisor integration | Not implemented | End-to-end signals to reconciled orders with no paper mutation |
-| Partial-entry protection and serialized target/trailing exits | Confirmed partial-fill protection implemented; worker coordination and targets/trailing still open | Disjoint capacity and cancel-race tests pass; end-to-end strategy acceptance pending |
-| Multi-day trade/order history and fee corrections | Incomplete | Overnight positions and absent historical orders reconcile without assumptions |
+| Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; entry feed and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending |
+| Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; targets/trailing still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
+| Multi-day trade/order history and fee corrections | Append-only fee corrections implemented; broker statement ingestion and historical books still open | Fee replay, refunds, as-of evaluation and conflicts tested; overnight book acceptance pending |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
 | Live monitoring, incidents and controlled daily reset | Not implemented | Operator-visible unprotected exposure, stale feeds and tested recovery |
 | Production two-account execution routing | Not implemented | Independent sessions/ledgers, no cross-account orders, fresh approval at each boundary |
@@ -77,9 +86,18 @@ unfilled through a price gap. The simulated SL-M examples do not prove that mark
 stops are available for the actual instrument. Production needs a reviewed stop
 limit/gap policy, monitoring and an explicit escalation procedure before activation.
 Do not round an odd-lot partial fill upward or sell beyond confirmed exposure.
-The future worker must request cancellation of the unfilled entry remainder on
-the first partial fill and continue observing/protecting any fills that win that
-race. That automatic coordination is not connected by this commit.
+`ProtectionMonitor` requests cancellation of the unfilled entry remainder on the
+first partial fill and observes/protects fills that win that race. It takes at most
+one action per fresh book cycle. Cancellation uncertainty blocks further commands
+and explicitly reports review-required exposure. The component is not connected to
+a production service; polling cadence, alerts and supervised gap escalation remain
+release requirements. A transport acknowledgement never reduces its uncovered count.
+
+The monitor requires a separately bound, immutable stop-limit price per entry. It
+does not infer a price from a paper setting, round odd lots upward, replace rejected
+stops in a loop, clear incidents, or liquidate an account on withdrawal. Its account
+wrapper currently always blocks/cancels new entries while preserving protective
+management. There is no entry-authorization switch in the wrapper.
 
 ## Transport validation evidence
 
@@ -91,7 +109,11 @@ handoff, crash-before-send, accepted-but-timed-out placement, cancellation races
 and cross-account rejection. `test_live_observations.py` verifies all-or-nothing
 book ingestion, missing orders, changed terminal fills and protective price checks.
 `test_live_protection.py` includes incremental partial fills and retained capacity
-during cancellation. None of these tests is a real broker or AWS acceptance test.
+during cancellation. `test_live_monitor.py` covers the full monitor protocol and
+verifies that a competing worker prevents even session creation. Fee-correction
+tests preserve original fills across restart and reject cross-account, changed or
+out-of-order statement evidence. None of these tests is a real broker or AWS
+acceptance test.
 
 The production Paper/Live API still returns 409 for Live. There is no environment
 variable, repository variable, timer or UI button that enables real order submission
