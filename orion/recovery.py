@@ -16,7 +16,8 @@ import tempfile
 import time
 import uuid
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 MAGIC = b"ORION-BACKUP-1\n"
@@ -24,6 +25,33 @@ CHUNK = 1024 * 1024
 UID = re.compile(r"[0-9a-f]{32}")
 NAME = re.compile(r"orion-\d{8}T\d{6}Z-[0-9a-f]{32}\.orb")
 CONFIG_FILES = ("config.json", "contracts.json", "economics.json", "portal.env", "public-web.env", "environment")
+
+
+SAFE_REASONS = {'Accounts changed during backup; retry': 'accounts-changed-during-backup-retry', 'Backup checksum mismatch': 'backup-checksum-mismatch', 'Backup exceeds single PUT limit; do not delete local backup': 'backup-exceeds-single-put-limit-do-not-delete-local-backup', 'Backup key must be separate from the portal key': 'backup-key-must-be-separate-from-the-portal-key', 'Backup manifest mismatch': 'backup-manifest-mismatch', 'Backup/work directories must be outside source roots': 'backup-work-directories-must-be-outside-source-roots', 'Credential ownership/structure mismatch': 'credential-ownership-structure-mismatch', 'Directory must be owner-only': 'directory-must-be-owner-only', 'Expected a regular file; symlinks are forbidden': 'expected-a-regular-file-symlinks-are-forbidden', 'Invalid account identity': 'invalid-account-identity', 'Invalid backup name or S3 prefix': 'invalid-backup-name-or-s3-prefix', 'Inventory changed during backup; retry': 'inventory-changed-during-backup-retry', 'Key file must be owner-only': 'key-file-must-be-owner-only', 'Local cleanup requires S3 upload': 'local-cleanup-requires-s3-upload', 'Only encrypted Orion backups may be uploaded': 'only-encrypted-orion-backups-may-be-uploaded', 'Orphan paper ledger; reconcile inventory before backup': 'orphan-paper-ledger-reconcile-inventory-before-backup', 'Paper ledger changed during restore': 'paper-ledger-changed-during-restore', 'Paper ledger has no state': 'paper-ledger-has-no-state', 'Portal key marker mismatch': 'portal-key-marker-mismatch', 'Production restore paths are forbidden': 'production-restore-paths-are-forbidden', 'Public bucket policy rejected': 'public-bucket-policy-rejected', 'Push token ownership mismatch': 'push-token-ownership-mismatch', 'Recovery inventory mismatch': 'recovery-inventory-mismatch', 'Required portal state missing': 'required-portal-state-missing', 'Restore destination must not exist': 'restore-destination-must-not-exist', 'Restore overlaps original source': 'restore-overlaps-original-source', 'Restore parent must be an existing private directory': 'restore-parent-must-be-an-existing-private-directory', 'S3 bucket must block all public access': 's3-bucket-must-block-all-public-access', 'S3 readback checksum mismatch': 's3-readback-checksum-mismatch', 'S3 versioning is required': 's3-versioning-is-required', 'SQLite backup deadline exceeded; retry later': 'sqlite-backup-deadline-exceeded-retry-later', 'SQLite foreign-key check failed': 'sqlite-foreign-key-check-failed', 'SQLite integrity check failed': 'sqlite-integrity-check-failed', 'Source file changed during backup; retry': 'source-file-changed-during-backup-retry', 'Source roots must be existing non-symlink directories': 'source-roots-must-be-existing-non-symlink-directories', 'Symlink directory rejected': 'symlink-directory-rejected', 'Symlink in portal state': 'symlink-in-portal-state', 'Truncated backup': 'truncated-backup', 'Unexpected archive root': 'unexpected-archive-root', 'Unknown backup format': 'unknown-backup-format', 'Unknown directory in portal state; review inventory': 'unknown-directory-in-portal-state-review-inventory', 'Unknown file in portal state; review inventory': 'unknown-file-in-portal-state-review-inventory', 'Unsafe archive member': 'unsafe-archive-member', 'Upload did not return a version ID': 'upload-did-not-return-a-version-id'}
+
+def safe_reason(exc):
+    # Return only fixed codes, never private exception messages or paths.
+    if type(exc) in (ValueError, TimeoutError) and str(exc) in SAFE_REASONS:
+        return SAFE_REASONS[str(exc)]
+    if isinstance(exc, sqlite3.Error):
+        if str(exc).startswith(("no such table:", "no such column:")):
+            return "sqlite-schema"
+        if getattr(exc, "sqlite_errorcode", None) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+            return "sqlite-busy"
+        return "sqlite-error"
+    if isinstance(exc, FileNotFoundError):
+        return "missing-file"
+    if isinstance(exc, PermissionError):
+        return "permission-denied"
+    if isinstance(exc, OSError) and exc.errno == 28:
+        return "disk-full"
+    if isinstance(exc, (InvalidToken, InvalidTag)):
+        return "invalid-ciphertext"
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid-json"
+    if isinstance(exc, (KeyError, TypeError)):
+        return "unexpected-data-shape"
+    return "unknown"
 
 
 def private_dir(path):
@@ -457,6 +485,7 @@ def main():
         else:
             print(json.dumps(restore(args.backup, args.destination, backup_key, portal_key, args.work_dir)))
     except Exception as exc:
+        print("ORION_RECOVERY_REASON=" + safe_reason(exc), file=__import__("sys").stderr)
         print("ORION_RECOVERY_STAGE=" + stage, file=__import__("sys").stderr)
         # SDK, SQL and crypto exceptions may contain private paths or values. No traceback/secret logging.
         raise SystemExit("Recovery operation failed (" + type(exc).__name__ + "); consult the runbook. No success receipt issued.") from None

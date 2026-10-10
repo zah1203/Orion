@@ -46,6 +46,14 @@ class BackupOperationsTests(unittest.TestCase):
                     host.checked_process(stage, ["test"])
                 self.assertEqual(str(caught.exception), expected)
 
+    def test_safe_reason_propagation(self):
+        for reason, expected in [("disk-full", "disk-full"), ("secret-value", "unknown")]:
+            with patch.object(host.subprocess, "run", side_effect=subprocess.CalledProcessError(
+                    1, ["private"], stderr="ORION_RECOVERY_REASON=" + reason)):
+                with self.assertRaises(host.SafeHostFailure) as caught:
+                    host.checked_process("backup-subprocess", ["test"])
+                self.assertEqual(caught.exception.reason, expected)
+
     def config(self):
         return dict(backup_bucket="orion-test-backups", portal_key_secret="portal-arn",
                     archive_key_secret="archive-arn", escrow_kms_key="kms-arn", runtime_role_name="runtime")

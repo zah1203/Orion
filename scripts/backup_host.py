@@ -22,8 +22,15 @@ FAILURE_CODES = (
 )
 
 
+SAFE_REASONS = ('accounts-changed-during-backup-retry', 'backup-checksum-mismatch', 'backup-exceeds-single-put-limit-do-not-delete-local-backup', 'backup-key-must-be-separate-from-the-portal-key', 'backup-manifest-mismatch', 'backup-work-directories-must-be-outside-source-roots', 'credential-ownership-structure-mismatch', 'directory-must-be-owner-only', 'expected-a-regular-file-symlinks-are-forbidden', 'invalid-account-identity', 'invalid-backup-name-or-s3-prefix', 'inventory-changed-during-backup-retry', 'key-file-must-be-owner-only', 'local-cleanup-requires-s3-upload', 'only-encrypted-orion-backups-may-be-uploaded', 'orphan-paper-ledger-reconcile-inventory-before-backup', 'paper-ledger-changed-during-restore', 'paper-ledger-has-no-state', 'portal-key-marker-mismatch', 'production-restore-paths-are-forbidden', 'public-bucket-policy-rejected', 'push-token-ownership-mismatch', 'recovery-inventory-mismatch', 'required-portal-state-missing', 'restore-destination-must-not-exist', 'restore-overlaps-original-source', 'restore-parent-must-be-an-existing-private-directory', 's3-bucket-must-block-all-public-access', 's3-readback-checksum-mismatch', 's3-versioning-is-required', 'sqlite-backup-deadline-exceeded-retry-later', 'sqlite-foreign-key-check-failed', 'sqlite-integrity-check-failed', 'source-file-changed-during-backup-retry', 'source-roots-must-be-existing-non-symlink-directories', 'symlink-directory-rejected', 'symlink-in-portal-state', 'truncated-backup', 'unexpected-archive-root', 'unknown-backup-format', 'unknown-directory-in-portal-state-review-inventory', 'unknown-file-in-portal-state-review-inventory', 'unsafe-archive-member', 'upload-did-not-return-a-version-id', 'sqlite-schema', 'sqlite-busy', 'sqlite-error', 'missing-file', 'permission-denied', 'disk-full', 'invalid-ciphertext', 'invalid-json', 'unexpected-data-shape', 'unknown')
+
+
 class SafeHostFailure(RuntimeError):
-    pass
+    def __init__(self, stage, reason="unknown"):
+        self.stage = stage if stage in FAILURE_CODES else "backup-subprocess"
+        self.reason = reason if reason in SAFE_REASONS else "unknown"
+        super().__init__(self.stage)
+
 
 
 def checked_process(stage, command, **kwargs):
@@ -31,14 +38,19 @@ def checked_process(stage, command, **kwargs):
         return subprocess.run(command, check=True, capture_output=True, **kwargs)
     except subprocess.CalledProcessError as exc:
         code = stage
+        reason = "unknown"
         if stage == "backup-subprocess":
             # Match only fixed markers; never forward raw child output or arguments.
             stderr = exc.stderr if isinstance(exc.stderr, str) else ""
             for line in stderr.splitlines():
+                if line.startswith("ORION_RECOVERY_REASON="):
+                    candidate_reason = line.removeprefix("ORION_RECOVERY_REASON=")
+                    if candidate_reason in SAFE_REASONS:
+                        reason = candidate_reason
                 for candidate in FAILURE_CODES:
                     if line == "ORION_RECOVERY_STAGE=" + candidate.removeprefix("backup-"):
                         code = candidate
-        raise SafeHostFailure(code) from None
+        raise SafeHostFailure(code, reason) from None
 
 
 
@@ -167,6 +179,6 @@ if __name__ == "__main__":
         main()
     except SafeHostFailure as exc:
         code = str(exc) if str(exc) in FAILURE_CODES else "backup-subprocess"
-        raise SystemExit("Backup host failed at " + code + "; no secret output emitted.") from None
+        raise SystemExit("Backup host failed at " + code + " [" + exc.reason + "]; no secret output emitted.") from None
     except Exception as exc:
         raise SystemExit("Backup host operation failed: " + type(exc).__name__ + "; no secret output emitted.") from None
