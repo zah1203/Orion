@@ -42,3 +42,19 @@ jobs:
           # nginx -t also binds listeners; emulate the private interface on this disposable runner.
           sudo ip address add 10.76.1.139/32 dev lo
           sudo nginx -t -c /tmp/orion-nginx-check.conf
+  mobile:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npx expo export --platform web

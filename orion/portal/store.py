@@ -225,6 +225,8 @@ class Store:
         encrypted = self.cipher.encrypt(json.dumps({"user_id": uid, "values": values}).encode())
         with self.db() as db:
             if broker_changed:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='live_pilots'").fetchone():
+                    db.execute("UPDATE live_pilots SET consent=0,version=version+1 WHERE uid=?", (uid,))
                 db.execute("DELETE FROM broker_sessions WHERE user_id=?", (uid,))
             db.execute(
                 "INSERT INTO secrets VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET ciphertext=excluded.ciphertext",
@@ -316,6 +318,8 @@ class Store:
             if not target or target[0] == "owner":
                 raise ValueError("Cannot change owner access")
             db.execute("UPDATE users SET access=?,enabled=0 WHERE id=?", (access, uid))
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='live_pilots'").fetchone():
+                db.execute("UPDATE live_pilots SET consent=0,enrolled=0 WHERE uid=?", (uid,))
             db.execute("INSERT INTO admin_audit(at,actor,subject,action) VALUES(?,?,?,?)", (time.time(), actor, uid, "access_" + access))
 
     def audit_admin(self, actor, uid, action):
