@@ -61,7 +61,7 @@ class ProtectionMonitor:
             remaining = entry['filled'] - sum(r['filled'] for r in exits)
             exposure += max(0, remaining)
             # ACK/PREPARED/DISPATCHING/UNKNOWN are never counted as protection.
-            protected = sum(r['quantity']-r['filled'] for r in exits if r['status'] in ('OPEN','PARTIAL'))
+            protected = sum(r['quantity']-r['filled'] for r in exits if r['status'] in ('OPEN','PARTIAL') and amount(r['trigger']) > 0)
             uncovered += max(0, remaining-protected)
         self.db.execute('INSERT OR REPLACE INTO live_monitor VALUES(1,?,?,?,?,?)',
                         (datetime.now(timezone.utc).isoformat(), state, exposure, uncovered, action))
@@ -130,7 +130,10 @@ class AccountMonitor:
     Paper worker slot therefore cannot trigger a competing broker login. No
     automatic service currently constructs this class.
     """
-    def __init__(self, store, uid, session_factory):
+    def __init__(self, store, uid, session_factory, *, strategy=False, collect_trades=False):
+        if type(strategy) is not bool or type(collect_trades) is not bool:
+            raise Refused('Explicit worker management options required')
+        self.strategy, self.collect_trades = strategy, collect_trades
         self.store, self.uid, self.session_factory = store, uid, session_factory
         self.session = None
         self.lease = self.ledger = None
@@ -145,18 +148,38 @@ class AccountMonitor:
                 raise Refused('Existing live ledger required')
             self.ledger = Ledger(account/'live.db', self.uid)
             self.session = self.session_factory()
-            self.monitor = ProtectionMonitor(self.ledger, self.session)
+            manager = ProtectionMonitor
+            if self.strategy:
+                from .strategy import ExitStrategy
+                manager = ExitStrategy
+            self.monitor = manager(self.ledger, self.session, collect_trades=self.collect_trades)
             return self
         except BaseException:
             self.__exit__()
             raise Refused('Account worker slot unavailable or ledger invalid') from None
 
-    def cycle(self):
+    def bind_strategy(self, entry_tag, *, targets, stop_limit, target_timeout):
+        """Transfer final confirmed exposure to exits without releasing the lease.
+
+        The caller must supply the previously reviewed signal/exit policy. This
+        method cannot submit an entry or stop/restart a Paper worker.
+        """
+        if self.ledger is None or self.session is None:
+            raise Refused('Account worker lease required')
+        from .strategy import ExitStrategy
+        with self.store.lock(self.uid):
+            manager = ExitStrategy(self.ledger, self.session, collect_trades=self.collect_trades)
+            manager.bind(entry_tag, targets=targets, stop_limit=stop_limit, target_timeout=target_timeout)
+            self.monitor, self.strategy = manager, True
+
+    def cycle(self, *, marks=None):
         if self.ledger is None:
             raise Refused('Account worker lease required')
         # There is no production entry authorization in this release. Monitoring
         # always closes outstanding entry orders and retains protective management.
         with self.store.lock(self.uid):
+            if self.strategy:
+                return self.monitor.cycle(marks={} if marks is None else marks)
             return self.monitor.cycle(entries_allowed=False)
 
     def __exit__(self, *unused):

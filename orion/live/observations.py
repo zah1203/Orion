@@ -105,17 +105,20 @@ class Observations:
                         if exit_row['status'] == 'PREPARED':
                             continue
                         observed = self._match(exit_row, normalized, seen, key, exit_row['quantity'], 'S')
-                        command = self.db.execute("SELECT request FROM broker_commands WHERE kind='STOP' AND tag=? AND operation='place'", (exit_row['tag'],)).fetchone()
+                        kind = 'EXIT' if amount(exit_row['trigger']) == 0 else 'STOP'
+                        command = self.db.execute("SELECT request FROM broker_commands WHERE kind=? AND tag=? AND operation='place'", (kind, exit_row['tag'])).fetchone()
                         if not command:
                             raise Refused('Protective command terms required')
                         requested = json.loads(command['request'])['request']
-                        if (observed['order_type'] != 'SL' or observed['trigger'] != amount(exit_row['trigger']) or
+                        if (observed['order_type'] != ('L' if kind == 'EXIT' else 'SL') or observed['trigger'] != amount(exit_row['trigger']) or
                                 observed['price'] != amount(requested['price'])):
                             raise Refused('Protective order terms changed')
+                        if observed['filled'] and observed['average'] < amount(requested['price']):
+                            raise Refused('Sell fill below committed limit')
                         self.protection.observe(exit_row['tag'], account=self.ledger.account,
                             broker_id=exit_row['broker_id'], symbol=body['symbol'], segment=body['segment'],
                             side='SELL', quantity=exit_row['quantity'], status=observed['status'], filled=observed['filled'])
-                        self._confirm('STOP', exit_row['tag'])
+                        self._confirm(kind, exit_row['tag'])
                 if seen != set(normalized):
                     raise Refused('External broker orders require review')
                 result = self.reconciliation.compare(orders, positions, started_at=started_at,

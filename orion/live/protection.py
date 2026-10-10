@@ -23,6 +23,7 @@ class Protection:
         self.ledger = ledger
         self.db = ledger.db
         self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS exit_terms(tag TEXT PRIMARY KEY, limit_price TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS protective_exits(
                 tag TEXT PRIMARY KEY, entry_tag TEXT NOT NULL,
                 quantity INTEGER NOT NULL, trigger TEXT NOT NULL,
@@ -85,13 +86,35 @@ class Protection:
             rows = self.db.execute("SELECT * FROM protective_exits WHERE entry_tag=?", (entry_tag,)).fetchall()
             if any(r['status'] in ('PREPARED', 'DISPATCHING', 'UNKNOWN', 'CANCEL_PENDING') for r in rows):
                 raise Refused("Previous exit unresolved")
-            if any(r['status'] in ('OPEN', 'PARTIAL') and amount(r['trigger']) != trigger for r in rows):
+            if any(r['status'] in ('OPEN', 'PARTIAL') and amount(r['trigger']) > 0 and amount(r['trigger']) != trigger for r in rows):
                 raise Refused('Existing stop trigger must agree')
             tag = 'exit' + hashlib.sha256(f'{entry_tag}:{len(rows)}'.encode()).hexdigest()[:24]
             self.db.execute("INSERT INTO protective_exits(tag,entry_tag,quantity,trigger,status) VALUES(?,?,?,?,'PREPARED')",
                             (tag, entry_tag, remaining, str(trigger)))
             # Exposure is not protected merely because an intent exists.
             self.db.execute("UPDATE control SET paused=1 WHERE id=1")
+        return self.get(tag)
+
+    def prepare_limit(self, entry_tag, *, quantity, limit_price, tick_size, lot_size):
+        """Reserve a target sell from free confirmed units only, never stop capacity."""
+        positive_int(quantity); positive_int(lot_size)
+        price, tick = amount(limit_price), amount(tick_size)
+        if not price or not tick or price % tick or quantity % lot_size:
+            raise Refused('Whole-lot tick-aligned exit required')
+        with self.ledger.transaction():
+            self._check_conflicts()
+            if self.db.execute('SELECT 1 FROM live_incidents').fetchone():
+                raise Refused('Target blocked by unresolved incident')
+            if self._unreserved(entry_tag) < quantity:
+                raise Refused('Target exceeds free confirmed exposure')
+            rows = self.db.execute('SELECT * FROM protective_exits WHERE entry_tag=?', (entry_tag,)).fetchall()
+            if any(r['status'] in ('PREPARED','DISPATCHING','UNKNOWN','CANCEL_PENDING') for r in rows):
+                raise Refused('Previous exit unresolved')
+            tag = 'exit' + hashlib.sha256(f'{entry_tag}:{len(rows)}'.encode()).hexdigest()[:24]
+            self.db.execute("INSERT INTO protective_exits(tag,entry_tag,quantity,trigger,status) VALUES(?,?,?,'0','PREPARED')",
+                            (tag, entry_tag, quantity))
+            self.db.execute('INSERT INTO exit_terms VALUES(?,?)', (tag, str(price)))
+            self.ledger.pause()
         return self.get(tag)
 
     def dispatch(self, tag):
@@ -156,6 +179,12 @@ class Protection:
         except Refused:
             self.incident('protective-observation-conflict')
             raise
-        if status in ('REJECTED', 'CANCELLED') and remaining:
+        planned = False
+        if status == 'CANCELLED' and self.db.execute("SELECT 1 FROM sqlite_master WHERE name='strategy_cancellations'").fetchone():
+            planned = bool(self.db.execute('''SELECT 1 FROM strategy_cancellations s
+                JOIN broker_commands c ON c.tag=s.tag AND c.operation='cancel'
+                WHERE s.tag=? AND c.broker_id=? AND c.status IN ('ACKNOWLEDGED','CONFIRMED')''',
+                (tag, broker_id)).fetchone())
+        if status in ('REJECTED', 'CANCELLED') and remaining and not planned:
             self.incident('unprotected-exposure')
         return self.get(tag)

@@ -179,12 +179,17 @@ class MonitorLeaseTests(unittest.TestCase):
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with self.assertRaises(Refused):
                     with AccountMonitor(store, uid, factory): pass
+                with self.assertRaises(Refused):
+                    with AccountMonitor(store, uid, factory, strategy=True): pass
             factory.assert_not_called()
             with AccountMonitor(store, uid, factory) as first:
                 with self.assertRaises(Refused):
                     with AccountMonitor(store, uid, factory): pass
             self.assertEqual(factory.call_count, 1)
             self.assertIsNone(first.ledger)
+            from orion.live.strategy import ExitStrategy
+            with AccountMonitor(store, uid, factory, strategy=True) as account:
+                self.assertIsInstance(account.monitor, ExitStrategy)
             self.assertEqual(paper.read_bytes(), b'synthetic-paper-untouched')
 
 class MonitorEvidenceTests(unittest.TestCase):

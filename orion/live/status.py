@@ -10,7 +10,7 @@ import sqlite3
 # override. Keep this list aligned with docs/live-release.md.
 BLOCKERS = (
     'production-signal-quote-worker-and-account-routing',
-    'serialized-target-trailing-and-stop-gap-policy',
+    'production-exit-routing-and-reviewed-stop-gap-policy',
     'broker-verified-cash-fees-and-dispatch-authorization',
     'verified-broker-contract-and-static-egress',
     'aws-live-ledger-restore-drill',

@@ -14,7 +14,7 @@ from .readonly import ProbeFailure, integer, rows
 
 def fingerprint(ledger):
     state = []
-    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts', 'fee_corrections', 'execution_terms', 'execution_attempts', 'broker_commands', 'protection_policy', 'terminal_history', 'broker_fill_evidence'):
+    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts', 'fee_corrections', 'execution_terms', 'execution_attempts', 'broker_commands', 'protection_policy', 'terminal_history', 'broker_fill_evidence', 'exit_terms', 'strategy_plans', 'strategy_cancellations'):
         if ledger.db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
             state.append((table, [dict(r) for r in ledger.db.execute(f'SELECT * FROM {table} ORDER BY 1')]))
     return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -200,5 +200,6 @@ class Reconciliation:
             if (observed['average'] != amount(row['average']) or observed['order_type'] != 'L' or
                     observed['price'] != amount(body['limit_price'])):
                 raise Refused('Entry price mismatch')
-        elif observed['order_type'] not in ('SL', 'SL-M') or observed['trigger'] != amount(body['trigger']):
+        elif ((observed['order_type'] not in (('L',) if amount(body['trigger']) == 0 else ('SL', 'SL-M'))) or
+              observed['trigger'] != amount(body['trigger'])):
             raise Refused('Protective order mismatch')

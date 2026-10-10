@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import json
 
 from .kotak import OrderRequest
-from .ledger import Refused
+from .ledger import Refused, amount
 
 
 class Commands:
@@ -24,12 +24,14 @@ class Commands:
             PRIMARY KEY(kind,tag,operation))''')
 
     def _row(self, kind, tag):
-        if kind not in ('ENTRY', 'STOP'):
+        if kind not in ('ENTRY', 'STOP', 'EXIT'):
             raise Refused('Unsupported command kind')
         table = 'intents' if kind == 'ENTRY' else 'protective_exits'
         row = self.db.execute(f'SELECT * FROM {table} WHERE tag=?', (tag,)).fetchone()
         if not row:
             raise Refused('Unknown command intent')
+        if kind != 'ENTRY' and (kind == 'EXIT') != (amount(row['trigger']) == 0):
+            raise Refused('Exit command purpose mismatch')
         return table, dict(row)
 
     def place(self, kind, tag, *, stop_limit=None):
@@ -57,10 +59,18 @@ class Commands:
             else:
                 from .protection import check_conflicts
                 check_conflicts(self.db)
+                if kind == 'EXIT' and self.db.execute('SELECT 1 FROM live_incidents').fetchone():
+                    raise Refused('Target blocked by unresolved incident')
+            exit_price = stop_limit
+            if kind == 'EXIT':
+                bound = self.db.execute('SELECT limit_price FROM exit_terms WHERE tag=?', (tag,)).fetchone()
+                if not bound:
+                    raise Refused('Bound target price required')
+                exit_price = bound[0]
             request = OrderRequest(tag=tag, symbol=body['symbol'],
                 quantity=body['quantity'] if kind == 'ENTRY' else row['quantity'],
                 lot_size=terms['lot_size'], tick=terms['tick'], kind=kind,
-                price=body['limit_price'] if kind == 'ENTRY' else stop_limit,
+                price=body['limit_price'] if kind == 'ENTRY' else exit_price,
                 trigger='0' if kind == 'ENTRY' else row['trigger'])
             request.parameters()
             command = dict(request=asdict(request))

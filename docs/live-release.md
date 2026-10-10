@@ -40,6 +40,14 @@ substitute for an integrated acceptance decision.
   never submits a BUY. The account wrapper acquires the existing worker lease before
   calling its session factory, so an active Paper worker cannot be displaced or
   subjected to a competing login. No production launcher constructs it yet.
+- A persisted exit coordinator for three targets and trailing stops. It reserves
+  disjoint units, waits for confirmed stop cancellations before target placement,
+  and moves the stop to the entry limit after T1 and T1 after T2. One lot exits at
+  T3 with earlier trailing milestones; two lots allocate to T1/T3. Each cycle
+  issues at most one command after reconciliation. Target limit orders are never
+  counted as stop-loss coverage. Timeouts cancel once; ambiguous outcomes do not
+  retry. The account wrapper can transfer final filled exposure from protection
+  management to the coordinator while retaining its worker lease and session.
 - An atomic broker evidence path joining stable order/position books with the
   current-day trade report. The private SDK process discards unnecessary response
   fields, joins missing trade tokens only through account-bound order IDs, checks
@@ -79,8 +87,8 @@ No production workers or accounts are changed by developing or merging code.
 | Requirement | Current status | Acceptance evidence |
 | --- | --- | --- |
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
-| Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; entry feed and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending |
-| Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; targets/trailing still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
+| Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; entry feed and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending; account wrapper can hand off final exposure to exit management without releasing its lease |
+| Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; target/trailing coordinator implemented; production signal policy binding and reviewed gap response still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
 | Multi-day trade/order history and fee corrections | Retained terminal history, bounded current-day trade collection and fee corrections implemented; verified statement import still open | Day rollover, carried positions, absent working orders, archive conflicts and fee corrections tested locally |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
 | Live monitoring, incidents and controlled daily reset | Account/Owner health displays and read-only endpoints implemented; production alert delivery and reviewed incident resolution remain open | Account isolation, stale/corrupt/missing ledger tests; no reset or automatic incident clearing |
@@ -152,6 +160,38 @@ The production Paper/Live API still returns 409 for Live. There is no environmen
 variable, repository variable, timer or UI button that enables real order submission
 in this draft. No new systemd Live service is installed. No trading behavior changes
 on October 19 merely because that date arrives.
+
+## Target/trailing coordination boundaries
+
+`ExitStrategy` binds an immutable policy to final confirmed whole-lot entry fills.
+A still-working partial entry remains with `ProtectionMonitor` for remainder
+cancellation and incremental stop coverage. `AccountMonitor.bind_strategy` then
+transfers that account to target/trailing management without another login or
+releasing its worker lease. This is a worker component, not a production launcher.
+The caller-supplied marks are not yet a verified production market-data adapter.
+
+A target event first persists a cancellation phase. Stop orders retain reserved
+units until terminal broker observations, including any late fills. The target
+then reserves only free confirmed whole units. Subsequent cycles protect the
+remaining units with separate stops. The units in a working target limit order
+are **not** simultaneously covered by a stop; health reports them as uncovered.
+This is serialized exit management, not broker-side OCO or uninterrupted protection.
+
+The explicit target timeout is 1–60 seconds. An unfilled/partially filled target is
+cancelled once; after confirmed cancellation, the coordinator restores protection
+and halts further target attempts for review. No price chasing or automatic retry
+is provided. Stale or retreated quotes stop new target actions and preserve or
+restore stops. Confirmed stop cancellation followed by process/network failure can
+leave exposure uncovered; an unresolved prepared/send state requires operator
+review instead of a blind replacement. Production alert delivery is still required.
+
+Trailing uses the entry **limit** at T1 and target 1 at T2, retaining the explicitly
+bound stop-to-limit gap. This is not a promise of break-even after charges. A quote
+at/below the limit of a still-working stop raises a review incident and does not
+reprice or submit a market order. The operator must review this gap policy before
+Live activation. Strategy tests cover T1/T2/T3, one-lot milestones, partial fills
+racing cancellation, stale quotes, target timeout, restart, unknown sends and
+capacity/price conflicts. They use a synthetic SDK and place no real orders.
 
 ## Integrated evidence and operator checks
 
