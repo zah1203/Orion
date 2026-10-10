@@ -436,3 +436,27 @@ incident-resolution workflows remain outstanding. Expo push
 requires a registered supported app/device; opening the web portal alone does not
 establish that alerts can be delivered. The existing Paper attention service and
 its notification behavior are unchanged.
+
+## Combined account lifecycle
+
+`serve_account` now combines selected-channel signal admission and existing-exposure
+monitoring under one AccountMonitor worker lease, one Live ledger and one broker
+session. Lease acquisition precedes both factories, so a running Paper worker
+prevents competing authentication. The standalone source wrapper remains available;
+the internal receiver shares the combined worker's ledger without closing it.
+
+Source disconnection or failed source authorization invalidates pending candidates
+and pauses entries while broker exposure monitoring continues. Broker failures
+record review-required health without constructing a replacement session. Explicit
+shutdown stops the receiver, pauses entry permission, closes the session/ledger
+and releases the lease. Separate `live_worker_health` records source and monitor
+states. Notification delivery stays in its independent runner.
+
+The integration has no BUY path, production service or supervisor activation.
+Existing exposure requires previously bound stop/exit policy; no protection price
+is guessed. Strategy mode consumes the bound broker-bid collector. Synchronous
+bounded broker reads serialize on the SQLite-owning thread and may delay source
+callbacks; source and quote freshness checks still apply. Production throughput
+and shutdown timing require acceptance on the actual deployment. Worker tests use
+synthetic sessions, including continuing protective SELL management after source
+failure, busy Paper leases, two accounts and broker failure cleanup.
