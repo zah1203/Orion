@@ -427,6 +427,7 @@ def main():
         if command == "restore":
             q.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
+    stage = "key-validation"
     try:
         if args.command == "init-key":
             with args.file.open("xb") as f:
@@ -438,13 +439,16 @@ def main():
         if args.command == "backup":
             if args.remove_local_after_upload and not args.bucket:
                 raise ValueError("Local cleanup requires S3 upload")
+            stage = "snapshot-verification"
             path, manifest = create(args.portal, args.runtime, args.config, args.output, backup_key,
                                     portal_key, args.work_dir, args.sqlite_timeout)
             result = {"backup": str(path), "sha256": sha(path), "counts": manifest["counts"], "local_verified": True}
             if args.bucket:
                 import boto3
+                stage = "s3-upload-readback"
                 result["s3"] = upload(path, args.bucket, args.prefix, boto3.client("s3", region_name=args.region))
             if args.remove_local_after_upload:
+                stage = "local-cleanup"
                 path.unlink()
                 result["local_ciphertext_removed"] = True
             print(json.dumps(result))
@@ -453,6 +457,7 @@ def main():
         else:
             print(json.dumps(restore(args.backup, args.destination, backup_key, portal_key, args.work_dir)))
     except Exception as exc:
+        print("ORION_RECOVERY_STAGE=" + stage, file=__import__("sys").stderr)
         # SDK, SQL and crypto exceptions may contain private paths or values. No traceback/secret logging.
         raise SystemExit("Recovery operation failed (" + type(exc).__name__ + "); consult the runbook. No success receipt issued.") from None
 
