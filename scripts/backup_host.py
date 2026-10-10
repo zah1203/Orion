@@ -16,6 +16,30 @@ ROOT = Path("/var/backups/orion")
 CONFIG = Path("/etc/orion/backup-operations.json")
 PYTHON = "/opt/orion/current/.venv/bin/python"
 AGENT = "/opt/orion/backup/current"
+FAILURE_CODES = (
+    "runtime-dependencies", "backup-key-validation", "backup-snapshot-verification",
+    "backup-s3-upload-readback", "backup-local-cleanup", "backup-subprocess",
+)
+
+
+class SafeHostFailure(RuntimeError):
+    pass
+
+
+def checked_process(stage, command, **kwargs):
+    try:
+        return subprocess.run(command, check=True, capture_output=True, **kwargs)
+    except subprocess.CalledProcessError as exc:
+        code = stage
+        if stage == "backup-subprocess":
+            # Match only fixed markers; never forward raw child output or arguments.
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            for line in stderr.splitlines():
+                for candidate in FAILURE_CODES:
+                    if line == "ORION_RECOVERY_STAGE=" + candidate.removeprefix("backup-"):
+                        code = candidate
+        raise SafeHostFailure(code) from None
+
 
 
 def atomic_json(path, value):
@@ -60,11 +84,11 @@ def escrow(client, secret, key):
 
 
 def backup(config):
-    result = subprocess.run([
+    result = checked_process("backup-subprocess", [
         PYTHON, AGENT + "/orion/recovery.py", "backup", "--backup-key-file", "/etc/orion/recovery.key",
         "--portal-key-file", "/etc/orion/portal.key", "--output", str(ROOT / "encrypted"),
         "--work-dir", str(ROOT / "work"), "--bucket", config["backup_bucket"], "--remove-local-after-upload",
-    ], capture_output=True, text=True, check=True, timeout=1500)
+    ], text=True, timeout=1500)
     receipt = json.loads(result.stdout)
     if not receipt.get("s3", {}).get("ciphertext_readback_verified"):
         raise ValueError("No verified upload receipt")
@@ -88,7 +112,7 @@ def main():
             import boto3
             config = json.loads(args.config.read_text())
             # The current release must already supply the runtime dependencies.
-            subprocess.run([PYTHON, "-c", "import cryptography,boto3"], check=True, capture_output=True)
+            checked_process("runtime-dependencies", [PYTHON, "-c", "import cryptography,boto3"])
             portal_key = read_key(Path("/etc/orion/portal.key"))
             client = boto3.client("secretsmanager", region_name="ap-south-1")
             recovery_path = Path("/etc/orion/recovery.key")
@@ -141,5 +165,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except SafeHostFailure as exc:
+        code = str(exc) if str(exc) in FAILURE_CODES else "backup-subprocess"
+        raise SystemExit("Backup host failed at " + code + "; no secret output emitted.") from None
     except Exception as exc:
         raise SystemExit("Backup host operation failed: " + type(exc).__name__ + "; no secret output emitted.") from None

@@ -32,6 +32,20 @@ class BackupOperationsTests(unittest.TestCase):
         self.assertEqual(data_key["Condition"]["StringEquals"]["kms:ViaService"],
                          "secretsmanager.ap-south-1.amazonaws.com")
 
+    def test_subprocess_diagnostics_hide_sensitive_output(self):
+        for stage, stderr, expected in [
+            ("runtime-dependencies", "private token", "runtime-dependencies"),
+            ("backup-subprocess", "private token\nORION_RECOVERY_STAGE=s3-upload-readback",
+             "backup-s3-upload-readback"),
+            ("backup-subprocess", "ORION_RECOVERY_STAGE=secret-value", "backup-subprocess"),
+        ]:
+            with self.subTest(stage=stage, expected=expected), patch.object(
+                    host.subprocess, "run", side_effect=subprocess.CalledProcessError(
+                        1, ["private-command"], output="private token", stderr=stderr)):
+                with self.assertRaises(host.SafeHostFailure) as caught:
+                    host.checked_process(stage, ["test"])
+                self.assertEqual(str(caught.exception), expected)
+
     def config(self):
         return dict(backup_bucket="orion-test-backups", portal_key_secret="portal-arn",
                     archive_key_secret="archive-arn", escrow_kms_key="kms-arn", runtime_role_name="runtime")
