@@ -14,7 +14,7 @@ from .readonly import ProbeFailure, integer, rows
 
 def fingerprint(ledger):
     state = []
-    for table in ('intents', 'protective_exits', 'reconciliation_instruments'):
+    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts'):
         if ledger.db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
             state.append((table, [dict(r) for r in ledger.db.execute(f'SELECT * FROM {table} ORDER BY 1')]))
     return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -105,6 +105,10 @@ class Reconciliation:
             row = self.db.execute('SELECT ucc FROM reconciliation_account').fetchone()
             if row and row[0] != self.ucc:
                 raise Refused('Reconciliation account binding mismatch')
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='fill_account'").fetchone():
+                bound = self.db.execute('SELECT ucc FROM fill_account').fetchone()
+                if bound and bound[0] != self.ucc:
+                    raise Refused('Reconciliation account binding mismatch')
             if not row:
                 self.db.execute('INSERT INTO reconciliation_account VALUES(?)', (self.ucc,))
 
