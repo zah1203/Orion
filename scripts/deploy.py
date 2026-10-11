@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import tarfile
 import tempfile
 import time
 import boto3
@@ -27,13 +26,8 @@ if mode == "diagnose":
     raise SystemExit(0)
 with tempfile.TemporaryDirectory() as tmp:
     archive = Path(tmp) / "release.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        for directory in ("orion", "scripts", "config", "tests", "examples", "docs"):
-            for path in sorted(Path(directory).rglob("*")):
-                if path.is_file() and "__pycache__" not in path.parts:
-                    tar.add(path, arcname=str(path), recursive=False)
-        for name in ("pyproject.toml", "requirements.txt"):
-            tar.add(name)
+    from release_archive import build_archive
+    build_archive(archive)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     key = f"releases/app/{sha}/{digest}.tar.gz"
     s3.upload_file(str(archive), bucket, key)
