@@ -36,9 +36,9 @@ with tempfile.TemporaryDirectory() as tmp:
         tar.extractall(release, filter="data")
 subprocess.run(["python3", "-m", "venv", str(release / ".venv")], check=True)
 python = str(release / ".venv/bin/python")
-subprocess.run([python, "-m", "pip", "install", "-r", str(release / "requirements.txt")], check=True)
-subprocess.run([python, "-m", "pip", "install", "--no-deps", str(release)], check=True)
-subprocess.run([python, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=release, check=True)
+subprocess.run([python, "-m", "pip", "install", "--quiet", "-r", str(release / "requirements.txt")], check=True)
+subprocess.run([python, "-m", "pip", "install", "--quiet", "--no-deps", str(release)], check=True)
+subprocess.run([python, "-m", "unittest", "discover", "-s", "tests"], cwd=release, check=True)
 if a.mode == "stage":
     print("Release staged and tested; no services or active release pointers changed.")
     raise SystemExit(0)
