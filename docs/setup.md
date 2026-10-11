@@ -140,3 +140,10 @@ The tooling is opt-in: its presence does not prove a production backup exists.
 
 For GitHub-only provisioning, activation, restore drills and reviewed teardown,
 see [GitHub backup operations](github-backup-operations.md).
+
+
+## Consolidated Live pilot work
+
+See [the Live release draft](live-release.md) for the two-account preparation UI,
+recovery support and remaining implementation/activation gates. The production
+worker remains Paper-only; deploying this draft does not enable real orders.

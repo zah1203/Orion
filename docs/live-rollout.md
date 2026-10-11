@@ -1,5 +1,10 @@
 # Staged Live rollout
 
+Current consolidation status and deployment gates: [Live release draft](live-release.md).
+The sections below document historical development stages; the consolidated draft
+adds pilot enrollment, a preparation UI, simulated orchestration and live-ledger recovery.
+It is still not a production Live worker.
+
 ## Current status
 
 Stage 1 provides the **offline development foundation**; Stage 2 adds an

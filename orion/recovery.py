@@ -152,7 +152,7 @@ def inventory(portal, runtime, config):
             r"(?:contracts\.backup-\d{8}-\d{6}\.json|economics-\d{4}-\d{2}-\d{2}\.json)", rel.name))
         allowed |= len(rel.parts) == 2 and rel.parts[0] == "broker-exports" and bool(re.fullmatch(
             r"(?:nse_fo|mcx_fo)\.csv(?:\.receipt\.json)?", rel.name))
-        allowed |= len(rel.parts) == 3 and rel.parts[0] == "accounts" and bool(UID.fullmatch(rel.parts[1])) and rel.name == "paper.db"
+        allowed |= len(rel.parts) == 3 and rel.parts[0] == "accounts" and bool(UID.fullmatch(rel.parts[1])) and rel.name in ("paper.db", "live.db")
         if not allowed:
             raise ValueError("Unknown file in portal state; review inventory")
         files["portal/" + rel.as_posix()] = (regular(path), path.suffix == ".db")
@@ -207,6 +207,21 @@ def inspect_state(root, portal_key):
             counts["paper_databases"] += 1
             counts["positions"] += len(state["positions"])
             counts["open_positions"] += sum(p["status"] == "OPEN" for p in state["positions"].values())
+    live_paths = list((root / "portal/accounts").glob("*/live.db"))
+    if live_paths:
+        counts.update(live_databases=0, live_orders=0, live_fills=0)
+        for path in live_paths:
+            if path.parent.name not in users:
+                raise ValueError("Invalid account identity")
+            with closing(connect_ro(path)) as db:
+                if db.execute("SELECT account FROM metadata").fetchall() != [(path.parent.name,)]:
+                    raise ValueError("Invalid account identity")
+                if db.execute("SELECT id FROM control").fetchall() != [(1,)]:
+                    raise ValueError("Invalid account identity")
+                counts["live_databases"] += 1
+                counts["live_orders"] += db.execute("SELECT COUNT(*) FROM intents").fetchone()[0]
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='fill_history'").fetchone():
+                    counts["live_fills"] += db.execute("SELECT COUNT(*) FROM fill_history").fetchone()[0]
     return counts
 
 
@@ -381,13 +396,17 @@ def restore(backup, destination, backup_key, portal_key, work_dir):
                     cfg = json.loads(settings)
                     cfg.update(mode="paper", new_entries_enabled=False, live_inputs_enabled=False)
                     db.execute("UPDATE users SET enabled=0,settings=? WHERE id=?", (json.dumps(cfg), uid))
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='live_pilots'").fetchone():
+                    db.execute("UPDATE live_pilots SET enrolled=0,consent=0")
                 for table in ("sessions", "broker_sessions", "worker_status", "worker_health", "push_outbox", "push_devices"):
                     db.execute(f"DELETE FROM {table}")
             report = {"verified_before_sanitizing": counts, "source_backup_sha256": sha(Path(backup)),
-                      "paper_ledgers_unchanged": True, "network_started": False, "aws_verified": False}
+                      "paper_ledgers_unchanged": True, "live_ledgers_unchanged": True,
+                      "live_reconciliation_required": bool(counts.get("live_databases")),
+                      "network_started": False, "aws_verified": False}
             # Assert ledger bytes have not changed after restoring control metadata.
             for name, info in manifest["files"].items():
-                if name.endswith("paper.db") and sha(destination / name) != info["sha256"]:
+                if name.endswith(("paper.db", "live.db")) and sha(destination / name) != info["sha256"]:
                     raise ValueError("Paper ledger changed during restore")
             (destination / "recovery-report.json").write_text(json.dumps(report, indent=2) + "\n")
             return report

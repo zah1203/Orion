@@ -42,6 +42,10 @@ class Accounting:
                 quantity INTEGER NOT NULL, price TEXT NOT NULL, fee TEXT NOT NULL,
                 executed_at TEXT NOT NULL,
                 PRIMARY KEY(segment,trade_day,trade_id));
+            CREATE TABLE IF NOT EXISTS fee_corrections(
+                source_ref TEXT NOT NULL, segment TEXT NOT NULL, trade_day TEXT NOT NULL,
+                trade_id TEXT NOT NULL, total_fee TEXT NOT NULL, reported_at TEXT NOT NULL,
+                PRIMARY KEY(source_ref,segment,trade_day,trade_id));
         ''')
         with ledger.transaction():
             for table in ('fill_account', 'reconciliation_account'):
@@ -126,6 +130,43 @@ class Accounting:
                 self.db.execute('UPDATE control SET paused=1 WHERE id=1')
             raise
 
+    def correct_fee(self, *, account, ucc, source_ref, segment, trade_day, trade_id,
+                    total_fee, reported_at):
+        """Append a reviewed fee total without rewriting immutable trade evidence.
+
+        Input remains an offline assertion until a statement adapter is verified.
+        Source references are opaque non-secret IDs, not documents or credentials.
+        Reports must advance in time; replaying a changed report is a conflict.
+        """
+        try:
+            if account != self.ledger.account or ucc != self.ucc:
+                raise Refused('Fee correction account mismatch')
+            text_field(source_ref); text_field(trade_id)
+            fee = bounded_amount(total_fee)
+            at = timestamp(reported_at)
+            if at > datetime.now(timezone.utc):
+                raise Refused('Future fee report')
+            values = (source_ref, segment, trade_day, trade_id, str(fee.normalize()), at.isoformat())
+            with self.ledger.transaction():
+                fill = self.db.execute('SELECT executed_at FROM fill_history WHERE segment=? AND trade_day=? AND trade_id=?', (segment, trade_day, trade_id)).fetchone()
+                if not fill or at < datetime.fromisoformat(fill[0]):
+                    raise Refused('Known fill preceding fee report required')
+                previous = self.db.execute('SELECT * FROM fee_corrections WHERE source_ref=? AND segment=? AND trade_day=? AND trade_id=?', values[:4]).fetchone()
+                if previous:
+                    if tuple(previous) != values:
+                        raise Refused('Fee report changed')
+                    return False
+                latest = self.db.execute('SELECT MAX(reported_at) FROM fee_corrections WHERE segment=? AND trade_day=? AND trade_id=?', (segment, trade_day, trade_id)).fetchone()[0]
+                if latest and at <= datetime.fromisoformat(latest):
+                    raise Refused('Fee report is not newer')
+                self.db.execute('INSERT INTO fee_corrections VALUES(?,?,?,?,?,?)', values)
+            return True
+        except Refused:
+            with self.ledger.transaction():
+                self.db.execute("INSERT OR IGNORE INTO live_incidents VALUES('fill-history-conflict')")
+                self.ledger.pause()
+            raise
+
     def summary(self, *, now, marks):
         """Per-entry FIFO attribution; conservative loss versus acquisition cost.
 
@@ -134,10 +175,62 @@ class Accounting:
         Carried unrealized losses count fully, gains never offset daily losses.
         This is not broker settlement MTM, available cash or an execution permit.
         """
+        return self._summary(now=now, marks=marks, allow_unverified=False)
+
+    def estimate_budget(self, *, now, marks, fee_reserve):
+        """Provisional intraday loss budget, never finalized charges or authority.
+
+        Retain a full round-trip reserve for each entry with unverified fills,
+        including closed entries. Corrections can increase the estimate but never
+        turn provenance into verified data. Older unreconciled charges still block.
+        """
+        now = timestamp(now)
+        reserve = bounded_amount(fee_reserve)
+        if not 0 < reserve <= 100000000:
+            raise Refused('Explicit positive fee reserve required')
+        day = now.astimezone(IST).date().isoformat()
+        with self.ledger.transaction(), localcontext() as context:
+            context.prec = 80
+            pending = []
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
+                pending = self.db.execute("SELECT * FROM broker_fill_evidence WHERE fee_status='unverified'").fetchall()
+            if any(r['trade_day'] != day for r in pending):
+                raise Refused('Prior-day charges require reconciliation')
+            tags = set()
+            for row in pending:
+                fill = self.db.execute('SELECT entry_tag FROM fill_history WHERE segment=? AND trade_day=? AND trade_id=?',
+                    (row['segment'],row['trade_day'],row['trade_id'])).fetchone()
+                if not fill:
+                    raise Refused('Unbound fee evidence')
+                tags.add(fill[0])
+            value = self._summary(now=now, marks=marks, allow_unverified=True)
+            extra = Decimal(0)
+            for tag in tags:
+                terms = self.db.execute('SELECT fee_reserve FROM execution_terms WHERE tag=?',(tag,)).fetchone()
+                if not terms or not bounded_amount(terms[0]):
+                    raise Refused('Bound fee reserve required')
+                recorded = Decimal(0)
+                for fill in self.db.execute('SELECT * FROM fill_history WHERE entry_tag=? AND trade_day=?',(tag,day)):
+                    correction = self.db.execute("""SELECT total_fee FROM fee_corrections
+                        WHERE segment=? AND trade_day=? AND trade_id=? AND reported_at<=?
+                        ORDER BY reported_at DESC LIMIT 1""",
+                        (fill['segment'],day,fill['trade_id'],now.isoformat())).fetchone()
+                    recorded += amount(correction[0] if correction else fill['fee'])
+                extra += max(Decimal(0), max(reserve, bounded_amount(terms[0]))-recorded)
+            return dict(value, fees=str(amount(value['fees'])+extra),
+                loss_used=str(amount(value['loss_used'])+extra),
+                recorded_fees=value['fees'], additional_fee_reserve=str(extra),
+                fee_basis='provisional-reserve', unverified_fee_entries=len(tags),
+                fees_verified=False, order_submission_available=False)
+
+    def _summary(self, *, now, marks, allow_unverified):
         now = timestamp(now)
         day = now.astimezone(IST).date().isoformat()
         with self.ledger.transaction(), localcontext() as context:
             context.prec = 80
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
+                if not allow_unverified and self.db.execute("SELECT 1 FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone():
+                    raise Refused('Broker charges unverified; risk budget unavailable')
             fills = [dict(r) for r in self.db.execute('SELECT * FROM fill_history ORDER BY executed_at,trade_id')]
             orders = self._orders()
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():
@@ -166,7 +259,11 @@ class Accounting:
                 multiplier = amount(row[0])
                 queue = lots.setdefault(tag, deque())
                 if fill['trade_day'] == day:
-                    fees += amount(fill['fee'])
+                    correction = self.db.execute('''SELECT total_fee FROM fee_corrections
+                        WHERE segment=? AND trade_day=? AND trade_id=? AND reported_at<=?
+                        ORDER BY reported_at DESC LIMIT 1''',
+                        (fill['segment'], fill['trade_day'], fill['trade_id'], now.isoformat())).fetchone()
+                    fees += amount(correction[0] if correction else fill['fee'])
                 if fill['side'] == 'BUY':
                     first_entry_days.setdefault(tag, fill['trade_day'])
                     queue.append([fill['quantity'], amount(fill['price']), multiplier])

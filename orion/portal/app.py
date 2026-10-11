@@ -127,6 +127,15 @@ class KotakVerify(Strict):
     totp: str = Field(pattern=r"^[0-9]{6}$")
 
 
+class PilotPolicy(Strict):
+    limits: dict
+
+
+class PilotConsent(Strict):
+    version: int = Field(strict=True, gt=0)
+    confirmation: Literal["REVIEW PILOT LIMITS"]
+
+
 def create_app(root, key, origin, *, trust_local_proxy=False):
     parsed = urlsplit(origin)
     if parsed.path or parsed.query or parsed.fragment or parsed.username:
@@ -348,32 +357,69 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
             raise HTTPException(404, "User not found")
         return activity(store.account_dir(uid) / "paper.db", before)
 
+    from ..live.pilot import Pilot
+    pilot = Pilot(store)
+
+    @app.get("/api/live/pilot")
+    def pilot_status(request: Request):
+        return pilot.status(identity(request)["user_id"])
+
+    @app.put("/api/admin/live/pilot/{uid}")
+    def configure_pilot(uid: str, body: PilotPolicy, request: Request):
+        actor = owner(request, True)
+        try:
+            return pilot.configure(actor, uid, body.limits)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/live/pilot/review")
+    def review_pilot(body: PilotConsent, request: Request):
+        uid = identity(request, True)["user_id"]
+        try:
+            return pilot.consent(uid, body.version)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/live/pilot/revoke")
+    def revoke_own_pilot(request: Request):
+        uid = identity(request, True)["user_id"]
+        return pilot.revoke(uid, uid)
+
+    @app.post("/api/admin/live/pilot/{uid}/revoke")
+    def revoke_pilot(uid: str, request: Request):
+        actor = owner(request, True)
+        try:
+            return pilot.revoke(actor, uid)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
     @app.get("/api/live/readiness")
     def live_readiness(request: Request):
         owner(request)
-        # Deliberately no broker calls, state initialization or live-mode mutation.
-        return {
-            "stage": "read-only-probe-available", "live_available": False,
-            "read_only_probe_available": True,
-            "order_submission_available": False, "pilot_scope": "owner-only",
-            "blockers": [
-                "broker-trading-session-and-identity",
-                "broker-response-normalization-and-position-reconciliation",
-                "protective-exits-and-partial-fill-handling",
-                "broker-verified-capital-fees-and-daily-risk",
-                "static-egress-and-broker-api-approval",
-                "live-ledger-backup-and-restore",
-                "owner-confirmation-and-deployment-gate",
-                "supervised-minimum-size-live-validation",
-            ],
-        }
+        from ..live.status import release_status
+        return release_status()
+
+    @app.get("/api/live/health")
+    def live_health(request: Request):
+        from ..live.status import account_status, release_status
+        uid = identity(request)["user_id"]
+        return dict(release=release_status(), account=account_status(store.root, uid))
+
+    @app.get("/api/admin/live/health/{uid}")
+    def admin_live_health(uid: str, request: Request):
+        from ..live.status import account_status, release_status
+        owner(request)
+        store.user(uid)
+        return dict(release=release_status(), account=account_status(store.root, uid))
 
     @app.post("/api/live/probe")
     async def live_probe(body: LiveReadOnly, request: Request):
         from .connections import connection_lease
         from ..live.probe import run_probe
         from ..live.readonly import ProbeFailure
-        uid = owner(request, True)
+        uid = identity(request, True)["user_id"]
+        if store.user(uid)["role"] != "owner" and not pilot.status(uid)["reviewed"]:
+            raise HTTPException(403, "Reviewed pilot enrollment required")
         connections.limit(uid, "live-readonly", 3)
         # Refuse active workers; do not pause, restart or replace their saved sessions.
         with connection_lease(store, uid):

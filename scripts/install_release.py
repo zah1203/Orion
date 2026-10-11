@@ -14,6 +14,7 @@ p.add_argument("--bucket", required=True)
 p.add_argument("--key", required=True)
 p.add_argument("--sha256", required=True)
 p.add_argument("--release", required=True)
+p.add_argument("--mode", choices=("portal", "stage", "full"), default="portal")
 a = p.parse_args()
 if not re.fullmatch("[0-9a-f]{40}", a.release):
     raise SystemExit("Expected Git commit")
@@ -38,6 +39,22 @@ python = str(release / ".venv/bin/python")
 subprocess.run([python, "-m", "pip", "install", "-r", str(release / "requirements.txt")], check=True)
 subprocess.run([python, "-m", "pip", "install", "--no-deps", str(release)], check=True)
 subprocess.run([python, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=release, check=True)
+if a.mode == "stage":
+    print("Release staged and tested; no services or active release pointers changed.")
+    raise SystemExit(0)
+if a.mode == "portal":
+    # Import from the checksum-verified extracted release, not the SSM bootstrap.
+    import sys
+    sys.path.insert(0, str(release))
+    from scripts.portal_release import activate
+    activate(a.release)
+    raise SystemExit(0)
+# Full deployments explicitly replace the managed portal-only override too.
+override = Path("/etc/systemd/system/orion-portal.service.d/90-orion-release.conf")
+if override.exists():
+    if override.is_symlink() or not override.read_text().startswith("# Managed by Orion portal-only deployment\n"):
+        raise SystemExit("Existing portal override requires review")
+    override.unlink()
 # Only stop the old paper process after the new environment passes tests.
 portal_active = subprocess.run(["systemctl", "is-active", "--quiet", "orion-portal.service"]).returncode == 0
 # Capture previously enabled legacy workers so they cannot race the supervisor on boot.

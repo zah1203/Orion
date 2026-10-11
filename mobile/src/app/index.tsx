@@ -21,6 +21,7 @@ import {
   OwnerSummary,
 } from "../components/Desk";
 import Performance from "../components/Performance";
+import LivePilot from "../components/LivePilot";
 import { api, login, logout, register, restore } from "../lib/api";
 import {
   phoneAlertsSupported,
@@ -782,6 +783,7 @@ export default function App() {
               )}
               {!selected && tab === "Account" && (
                 <>
+                  <LivePilot owner={false} uid={me.id} />
                   <Card title="Phone alerts">
                     <Text style={s.text}>
                       Get notified when Kotak needs authentication or your
@@ -1022,6 +1024,7 @@ export default function App() {
               )}
               {!selected && tab === "Owner" && (
                 <>
+                  <LivePilot owner uid={me.id} users={users.map((u) => ({ id: u.id, username: u.username, access: u.access }))} />
                   <OwnerSummary
                     users={users}
                     busy={busy}

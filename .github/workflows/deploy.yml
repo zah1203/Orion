@@ -1,6 +1,16 @@
-name: Deploy paper application
+name: Deploy application
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'portal updates dashboard only; stage installs only; full restarts Paper workers'
+        type: choice
+        required: true
+        default: portal
+        options:
+          - portal
+          - stage
+          - full
 permissions:
   contents: read
   id-token: write
@@ -12,6 +22,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     env:
+      DEPLOY_MODE: ${{ inputs.mode }}
       AWS_REGION: ap-south-1
       ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
       INSTANCE_ID: ${{ vars.INSTANCE_ID }}

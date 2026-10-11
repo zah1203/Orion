@@ -131,15 +131,40 @@ class ProtectionTests(unittest.TestCase):
                 with self.assertRaises(Refused):
                     self.ledger.development_resume()
 
-    def test_partial_entry_must_be_terminal_and_no_lot_rounding(self):
-        # Synthetic fixture represents a partially filled entry cancelled by broker.
+    def test_partial_entry_protected_without_lot_rounding(self):
         self.ledger.db.execute("UPDATE intents SET status='PARTIAL',filled=4 WHERE tag=?", (self.entry,))
-        with self.assertRaises(Refused):
-            self.prepare()
-        self.entry_observe('CANCELLED', 4)
         with self.assertRaises(Refused):
             self.prepare(lot_size=10)
         self.assertEqual(self.protection.get(self.prepare())['quantity'], 4)
+
+    def test_incremental_partial_fills_reserve_disjoint_stops(self):
+        self.ledger.db.execute("UPDATE intents SET status='PARTIAL',filled=4 WHERE tag=?", (self.entry,))
+        first = self.prepare()
+        self.protection.dispatch(first)
+        self.observe(first, quantity=4)
+        with self.assertRaises(Refused): self.prepare()
+        self.entry_observe('PARTIAL', 7)
+        second = self.prepare()
+        self.assertEqual(self.protection.get(second)['quantity'], 3)
+        self.protection.dispatch(second)
+        self.observe(second, broker_id='exit2', quantity=3)
+        self.observe(first, quantity=4, status='FILLED', filled=4)
+        with self.assertRaises(Refused): self.prepare()
+        # An entry fill winning its cancel race requires new protection too.
+        self.entry_observe('CANCELLED', 9)
+        third = self.prepare()
+        self.assertEqual(self.protection.get(third)['quantity'], 2)
+
+    def test_partial_cancel_race_never_borrows_reserved_capacity(self):
+        self.ledger.db.execute("UPDATE intents SET status='PARTIAL',filled=4 WHERE tag=?", (self.entry,))
+        first = self.prepare()
+        self.protection.dispatch(first)
+        self.observe(first, quantity=4)
+        self.protection.request_cancel(first)
+        self.entry_observe('PARTIAL', 8)
+        with self.assertRaises(Refused): self.prepare()
+        self.observe(first, quantity=4, status='CANCELLED', filled=2)
+        self.assertEqual(self.protection.get(self.prepare())['quantity'], 6)
 
     def test_parallel_connection_cannot_reserve_same_exposure(self):
         self.prepare()
