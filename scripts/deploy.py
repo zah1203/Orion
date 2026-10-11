@@ -11,6 +11,9 @@ import tempfile
 import time
 import boto3
 
+mode = os.environ.get("DEPLOY_MODE", "portal")
+if mode not in ("portal", "stage", "full"):
+    raise SystemExit("Invalid deployment mode")
 sha = os.environ["GITHUB_SHA"]
 bucket = os.environ["ARTIFACT_BUCKET"]
 instance = os.environ["INSTANCE_ID"]
@@ -31,7 +34,7 @@ with tempfile.TemporaryDirectory() as tmp:
     key = f"releases/app/{sha}/{digest}.tar.gz"
     s3.upload_file(str(archive), bucket, key)
 installer = base64.b64encode(Path("scripts/install_release.py").read_bytes()).decode()
-args = shlex.join(["--bucket", bucket, "--key", key, "--sha256", digest, "--release", sha])
+args = shlex.join(["--bucket", bucket, "--key", key, "--sha256", digest, "--release", sha, "--mode", mode])
 command = f"set -eu\ncloud-init status --wait\nprintf %s {shlex.quote(installer)} | base64 -d > /root/orion-install-release.py\n/opt/orion/deploy-venv/bin/python /root/orion-install-release.py {args}"
 response = ssm.send_command(
     InstanceIds=[instance],

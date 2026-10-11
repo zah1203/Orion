@@ -655,3 +655,42 @@ There has been no real broker request, production deployment, Live activation or
 AWS restore verification as part of this integration. Atomic BUY authorization,
 reviewed cash/fee adapters, market/source provenance, exit-policy binding and the
 production handover/acceptance work above remain unfinished.
+
+## Merge and deploy the preparation release
+
+This branch may be merged as a **Live preparation release**, not as completed
+real-money trading. The portal's Live activation endpoint still returns 409.
+Enrollment, consent, diagnostics and code installation never enable BUY orders.
+Cash/fee acceptance and the unfinished production execution gates listed above
+remain required before any Live activation release.
+
+The GitHub **Deploy application** workflow now has three explicit modes:
+
+| Mode | Effect | Paper workers |
+| --- | --- | --- |
+| `portal` (default) | Install/test a separate release, then restart only the portal on that exact commit | Existing processes and `/opt/orion/current` preserved |
+| `stage` | Install/test a separate release without activating it | No service changes |
+| `full` | Existing whole-application deployment, including supervisor and worker restarts | Interrupted; requires a planned handover |
+
+For this preparation release use `portal` from `main`. The portal may be briefly
+unavailable while restarting; account data and paper positions are not restored,
+reset or overwritten. A managed systemd drop-in pins only the portal's working
+directory and executable to the new release. Current portal migrations add tables;
+the old Paper supervisor/attention/workers continue using their existing release
+and shared backward-compatible account data. Newly started Paper workers also use
+that unchanged `/opt/orion/current` pointer. No new Live worker service is enabled.
+
+The installer checks portal HTTP health, the effective working directory, the
+Paper release pointer and worker MainPID/InvocationID/ActiveState inventory. A
+failed check restores the prior portal drop-in and restarts only the portal. If
+rollback fails, the deployment reports operator review required. It does not
+restore a database backup or restart workers as a recovery shortcut. A worker
+identity change from any cause makes the continuity check fail; inspect it before
+retrying. This is tested with isolated filesystem/process doubles, not proof of
+AWS behavior until the GitHub deployment succeeds.
+
+An installed commit directory is never overwritten, including after a failed
+activation. Inspect the SSM invocation and existing release before retrying; a
+new reviewed commit can be deployed to a new directory. Full deployments remove
+the managed portal pin and resume using the shared current release. Manual or
+symlink portal overrides are refused for review.
