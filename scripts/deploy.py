@@ -12,7 +12,7 @@ import time
 import boto3
 
 mode = os.environ.get("DEPLOY_MODE", "portal")
-if mode not in ("portal", "stage", "full"):
+if mode not in ("portal", "stage", "full", "diagnose"):
     raise SystemExit("Invalid deployment mode")
 sha = os.environ["GITHUB_SHA"]
 bucket = os.environ["ARTIFACT_BUCKET"]
@@ -21,6 +21,10 @@ if not re.fullmatch("[0-9a-f]{40}", sha) or not re.fullmatch("i-[0-9a-f]+", inst
     raise SystemExit("Invalid deployment IDs")
 s3 = boto3.client("s3", region_name="ap-south-1")
 ssm = boto3.client("ssm", region_name="ap-south-1")
+if mode == "diagnose":
+    from deploy_diagnostics import diagnose
+    diagnose(ssm, instance, os.environ.get("DIAGNOSTIC_COMMAND", ""))
+    raise SystemExit(0)
 with tempfile.TemporaryDirectory() as tmp:
     archive = Path(tmp) / "release.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
