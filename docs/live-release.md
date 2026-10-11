@@ -614,3 +614,44 @@ entries. Before using estimates for real entry decisions, the Live policy must
 explicitly adopt a reviewed fee-estimation model and reconcile actual statements;
 the cash-only spending interpretation and remaining entry/exit authorization
 requirements must also be completed. No actual account fee or statement was read.
+
+## Integrated read-only candidate funding preflight
+
+`orion.live.preflight.funding_preflight(router, session, source,
+accounting=accounting, marks=marks, **quote)` connects the pending signal,
+current reviewed account policy, whole-lot ledger risk assessment and the existing
+private-session funding operation. It is an internal component for a caller that
+owns the account worker lease; no service or portal endpoint starts it automatically.
+
+The preflight sizes the candidate before making one `funding` request. Account and
+SQLite locks are released during that request. It then re-runs policy, channel,
+source freshness, quote freshness and ledger risk checks. A changed reservation,
+loss budget, paused state, quantity or policy invalidates the result. Broker
+account, instrument, price, quantity and timestamps must match, and the complete
+read/recheck must finish within five seconds. Reported shortfall is retained as a
+blocker. Output is allowlisted; SDK exception text and extra response fields do
+not escape. It never reserves funds, creates an order, resumes entries or retries.
+
+A caller-supplied `market_open=True` still does not establish market provenance.
+Neither a successful preflight nor zero `insufFund` establishes spendable cash.
+All cash, fee and order-authorization flags remain false. Output is transient
+acceptance evidence, never a cached dispatch permit or data to commit to Git.
+Tests exercise policy revocation, reconsent, channel/source changes, concurrent
+reservations, expiration, identity mismatch, private-process transport and no
+mutation of the ledger. All broker responses in those tests are synthetic.
+
+### What is needed from Kotak for cash authorization
+
+The contract note is only needed to validate actual fee reconciliation. Cash
+integration separately needs the documented cash-only field or calculation for
+NSE NRML option purchases, including treatment of collateral, unsettled proceeds,
+pending withdrawals, existing order blocks and unposted charges. The SDK examples
+of `Net` and `avlCash` alone do not establish that calculation. Obtain broker
+confirmation and compare fresh read-only responses against the same account's
+funds breakdown before implementing the spending adapter. Do not substitute an
+owner-entered balance, configured capital limit, or guessed subtraction formula.
+
+There has been no real broker request, production deployment, Live activation or
+AWS restore verification as part of this integration. Atomic BUY authorization,
+reviewed cash/fee adapters, market/source provenance, exit-policy binding and the
+production handover/acceptance work above remain unfinished.
