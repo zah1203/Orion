@@ -53,6 +53,11 @@ class CoordinatorTests(unittest.TestCase):
         c.db.execute('CREATE TABLE live_source_health(id INTEGER,checked_at TEXT,state TEXT)')
         c.db.execute("INSERT INTO live_source_health VALUES(1,?,'connected')",(datetime.now(timezone.utc).isoformat(),))
         self.ready(a)
+        from orion.live.authorization import review, CONFIRMATION
+        with self.store.db() as db:
+            db.execute('INSERT OR REPLACE INTO live_worker_slots VALUES(?,1,1,0)',(self.owner,))
+        with patch('orion.live.status.release_status',return_value={'order_submission_available':True}), self.store.lock(self.owner):
+            review(a.ledger,self.store,self.owner,policy_version=1,confirmation=CONFIRMATION)
         return c
 
     def test_readonly_evaluation_uses_bound_market_quote_and_cash_without_mutation(self):
@@ -84,7 +89,7 @@ class CoordinatorTests(unittest.TestCase):
                 self.assertEqual(c.db.execute('SELECT COUNT(*) FROM execution_attempts').fetchone()[0],1)
                 self.assertEqual(c.db.execute('SELECT status FROM broker_commands').fetchone()[0],'SENDING')
             self.session.on_place=committed
-            with patch('orion.live.coordinator.release_status',return_value={'order_submission_available':True}):
+            with patch('orion.live.status.release_status',return_value={'order_submission_available':True}):
                 result=c.submit(CHANNEL+':1')
                 with self.assertRaises(Refused): c.submit(CHANNEL+':1')
             self.assertFalse(result['fill_confirmed'])
@@ -97,7 +102,7 @@ class CoordinatorTests(unittest.TestCase):
         self.message()
         with self.account() as a:
             c=self.coordinator(a); self.session.fail_place=True
-            with patch('orion.live.coordinator.release_status',return_value={'order_submission_available':True}):
+            with patch('orion.live.status.release_status',return_value={'order_submission_available':True}):
                 with self.assertRaises(Refused): c.submit(CHANNEL+':1')
                 with self.assertRaises(Refused): c.submit(CHANNEL+':1')
             self.assertEqual(self.session.operations.count('place'),1)
@@ -109,7 +114,7 @@ class CoordinatorTests(unittest.TestCase):
         with self.account() as a:
             c=self.coordinator(a)
             self.session.after_funding=lambda:self.pilot.revoke(self.owner,self.owner)
-            with patch('orion.live.coordinator.release_status',return_value={'order_submission_available':True}):
+            with patch('orion.live.status.release_status',return_value={'order_submission_available':True}):
                 with self.assertRaises(Refused): c.submit(CHANNEL+':1')
             self.assertFalse(c.db.execute('SELECT 1 FROM intents').fetchone())
             self.assertNotIn('place',self.session.operations)
@@ -136,7 +141,7 @@ class CoordinatorTests(unittest.TestCase):
         self.message()
         with self.account() as a:
             c=self.coordinator(a)
-            with patch('orion.live.coordinator.release_status',return_value={'order_submission_available':True}), \
+            with patch('orion.live.status.release_status',return_value={'order_submission_available':True}), \
                     patch.object(c.preparation.plans,'_bind_locked',side_effect=Refused('synthetic bind failure')):
                 with self.assertRaises(Refused): c.submit(CHANNEL+':1')
             for table in ('intents','execution_attempts','execution_terms','entry_exit_plans','broker_commands'):

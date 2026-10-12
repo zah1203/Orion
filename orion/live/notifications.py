@@ -74,19 +74,24 @@ class LiveNotifications:
             except Exception:
                 self.journal.finish(pending['alert_id'],pending['claim'],delivered=False)
                 return 'delivery-unknown'
-        # Lock device ownership/opt-in through the one-shot send. This prevents a
-        # concurrent logout/reassignment from substituting a different recipient.
+        query = """SELECT d.id,d.ciphertext FROM push_devices d JOIN users u ON u.id=d.user_id
+            WHERE d.user_id=? AND d.expires>? AND u.access='approved' AND d.last_error=''
+            ORDER BY d.expires DESC,d.id LIMIT 1"""
         with self.store.db() as db:
-            db.execute('BEGIN IMMEDIATE')
-            device = db.execute('''SELECT d.id,d.ciphertext FROM push_devices d JOIN users u ON u.id=d.user_id
-                WHERE d.user_id=? AND d.expires>? AND u.access='approved' AND d.last_error=''
-                ORDER BY d.expires DESC,d.id LIMIT 1''', (self.ledger.account,now)).fetchone()
-            if not device:
-                return 'no-registered-device'
-            event = self.journal.claim()
-            if event is None:
-                return 'idle'
-            try:
+            device = db.execute(query, (self.ledger.account, now)).fetchone()
+        if not device:
+            return 'no-registered-device'
+        # Never write live.db while holding the accounts.db writer lock: worker
+        # handover takes these locks in the opposite order.
+        event = self.journal.claim()
+        if event is None:
+            return 'idle'
+        try:
+            with self.store.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                current = db.execute(query, (self.ledger.account, now)).fetchone()
+                if not current or tuple(current) != tuple(device):
+                    raise ValueError
                 token = self.store.cipher.decrypt(device['ciphertext']).decode()
                 if not re.fullmatch(r'(?:ExpoPushToken|ExponentPushToken)\[[A-Za-z0-9_-]+\]',token):
                     raise ValueError
@@ -98,13 +103,15 @@ class LiveNotifications:
                 data = result['data']; ticket = data.get('id')
                 if data.get('details',{}).get('error') == 'DeviceNotRegistered':
                     db.execute("UPDATE push_devices SET last_error='Notification registration required' WHERE id=?", (device['id'],))
-                if result.get('errors') or data.get('status') != 'ok' or not isinstance(ticket,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',ticket):
-                    raise ValueError
-                self.db.execute('INSERT INTO live_alert_receipts VALUES(?,?,?,?,?)', (event['id'],ticket,now+900,now+3600,device['id']))
-                return 'receipt-pending'
-            except Exception:
-                self.journal.finish(event['id'],event['claim'],delivered=False)
-                return 'delivery-unknown'
+                valid = not result.get('errors') and data.get('status') == 'ok' and isinstance(ticket,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}',ticket)
+            if not valid:
+                raise ValueError
+            self.db.execute('INSERT INTO live_alert_receipts VALUES(?,?,?,?,?)', (event['id'],ticket,now+900,now+3600,device['id']))
+            return 'receipt-pending'
+        except Exception:
+            self.journal.finish(event['id'],event['claim'],delivered=False)
+            return 'delivery-unknown'
+
 
 
 def dispatch_accounts(store, *, _post=post):
@@ -120,6 +127,10 @@ def dispatch_accounts(store, *, _post=post):
         ledger = None
         try:
             ledger = Ledger(path,user['id'])
+            from .controls import _worker
+            from .alerts import health_event
+            if store.live_slot_reserved(user['id']) and not _worker(ledger.db):
+                health_event(ledger, 'review-required', 0)
             LiveNotifications(store,ledger,_post=_post).cycle()
             checked += 1
         except Exception:
@@ -131,7 +142,7 @@ def dispatch_accounts(store, *, _post=post):
 
 
 def main():
-    """Explicit independent runner. No installer enables it automatically."""
+    """Independent runner installed with a full deployment; delivery is opt-in."""
     import fcntl
     from orion.portal.store import Store
     key = Path(os.environ['ORION_PORTAL_KEY_FILE'])

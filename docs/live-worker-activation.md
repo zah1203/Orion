@@ -7,6 +7,10 @@ exposure. It is not a read-only broker probe. A startup acknowledgement confirms
 authentication and lease ownership, not successful reconciliation or readiness
 to trade real money.
 
+The integrated worker also performs flat-account [entry checks](live-entry-activation.md).
+Real entries additionally require release acceptance and a separate one-entry
+authorization from that account owner. Starting monitoring does not grant it.
+
 ## Deploy from GitHub
 
 Merge the consolidated PR after checks pass. Use the existing GitHub release

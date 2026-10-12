@@ -92,5 +92,6 @@ def enqueue(store, uid, **instruction):
 
 def pause(store, uid):
     with _existing(store, uid) as ledger:
-        ledger.pause()
+        from .authorization import revoke
+        revoke(ledger)
         return dict(entries_paused=True)
