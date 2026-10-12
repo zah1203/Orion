@@ -660,7 +660,7 @@ owner-entered balance, configured capital limit, or guessed subtraction formula.
 
 There has been no real broker request, production deployment, Live activation or
 AWS restore verification as part of this integration. Atomic BUY authorization,
-reviewed cash/fee adapters, market/source provenance, exit-policy binding and the
+reviewed cash/fee adapters, market/source provenance, production entry coordination and the
 production handover/acceptance work above remain unfinished.
 
 ## Merge and deploy the preparation release
@@ -701,3 +701,36 @@ activation. Inspect the SSM invocation and existing release before retrying; a
 new reviewed commit can be deployed to a new directory. Full deployments remove
 the managed portal pin and resume using the shared current release. Manual or
 symlink portal overrides are refused for review.
+
+
+## Persisted signal exits and final-fill handoff
+
+Pilot limits now require two explicit integer values: `stop_gap_ticks` (1–100)
+and `target_timeout_seconds` (1–60). There are no production defaults. The owner
+saves them along with the account's monetary limits, then that account reviews
+the new policy version. Older policies remain stored but show incomplete and
+cannot be consented to until reconfigured. This changes no Paper settings.
+
+`EntryPlans.bind` binds an undispatched PREPARED intent to its admitted signal,
+exact account/instrument/entry range/stop/lot size and current policy. It saves
+the source digest, policy version, three targets, stop-limit price and timeout
+in `live.db`, atomically with its protective stop policy. Edited, stale, revoked,
+reconfigured and mismatched sources fail closed. These persisted instructions
+are included in the reconciliation fingerprint. Binding is not permission to
+submit an entry; the future production entry coordinator must invoke it before
+atomic cash/risk/dispatch authorization. No current production BUY path exists.
+
+After broker reconciliation confirms all entries final, the leased monitor can
+transfer exposed positions with saved plans to the target/trailing coordinator.
+Working partial entries remain in remainder-cancellation/protection management.
+Missing legacy plans never get guessed, and odd-lot fills require review. The
+handoff issues no extra broker command and retains the same session and lease.
+Subsequent worker cycles collect broker bids for target management. Saved exits
+survive restart and consent withdrawal so existing exposure is not abandoned.
+
+Validation uses synthetic accounts and a fake broker, including source revocation,
+policy changes, isolated accounts, restart, partial fills, missing plans and the
+worker's automatic transition to quote-driven exit management. This is not an
+AWS Live acceptance test or a real order test. Cash/fee evidence, trusted entry
+feed/market provenance, atomic BUY dispatch, production handover, AWS Live restore
+and supervised account activation remain outstanding. The release gate stays off.

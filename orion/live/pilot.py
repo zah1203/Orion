@@ -6,7 +6,7 @@ import time
 from .ledger import Refused, amount, positive_int
 
 MONEY = ('capital', 'max_order_premium', 'max_open_premium', 'daily_loss', 'fee_reserve', 'max_trade_loss', 'max_open_risk')
-COUNTS = ('max_lots', 'max_entries')
+COUNTS = ('max_lots', 'max_entries', 'stop_gap_ticks', 'target_timeout_seconds')
 
 
 def validate_limits(values):
@@ -20,7 +20,7 @@ def validate_limits(values):
         result[name] = str(v)
     for name in COUNTS:
         positive_int(values[name])
-        if values[name] > 100:
+        if values[name] > (60 if name == 'target_timeout_seconds' else 100):
             raise Refused('Pilot count limit too large')
         result[name] = values[name]
     if not amount(result['max_order_premium']) <= amount(result['max_open_premium']) <= amount(result['capital']):
@@ -73,6 +73,10 @@ class Pilot:
         with self.store.lock(uid), self.store.db() as db:
             db.execute('BEGIN IMMEDIATE')
             user = db.execute('SELECT access FROM users WHERE id=?', (uid,)).fetchone()
+            policy = db.execute('SELECT limits FROM live_pilots WHERE uid=?', (uid,)).fetchone()
+            if not policy:
+                raise Refused('Current enrolled policy required')
+            validate_limits(json.loads(policy['limits']))
             changed = db.execute('UPDATE live_pilots SET consent=? WHERE uid=? AND enrolled=1 AND version=?', (version, uid, version)) if user and user[0] == 'approved' else None
             if changed is None or changed.rowcount != 1:
                 raise Refused('Current enrolled policy required')
@@ -93,7 +97,14 @@ class Pilot:
     def status(self, uid):
         with self.store.db() as db:
             row = db.execute('SELECT version,limits,consent,enrolled FROM live_pilots WHERE uid=?', (uid,)).fetchone()
-        return dict(enrolled=bool(row and row['enrolled']), version=row['version'] if row else None,
+        complete = False
+        if row:
+            try:
+                validate_limits(json.loads(row['limits']))
+                complete = True
+            except (Refused, ValueError, TypeError):
+                pass
+        return dict(policy_complete=complete, enrolled=bool(row and row['enrolled']), version=row['version'] if row else None,
                     limits=json.loads(row['limits']) if row else None,
-                    reviewed=bool(row and row['enrolled'] and row['consent'] == row['version']),
+                    reviewed=bool(complete and row and row['enrolled'] and row['consent'] == row['version']),
                     live_available=False, order_submission_available=False)

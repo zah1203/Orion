@@ -197,7 +197,17 @@ class AccountMonitor:
         with self.store.lock(self.uid):
             if self.strategy:
                 return self.monitor.cycle(marks={} if marks is None else marks)
-            return self.monitor.cycle(entries_allowed=False)
+            result = self.monitor.cycle(entries_allowed=False)
+            if result['state'] != 'review-required':
+                from .entry_plans import handoff
+                try:
+                    manager = handoff(self.monitor)
+                    if manager is not None:
+                        self.monitor, self.strategy = manager, True
+                except Exception:
+                    self.ledger.pause()
+                    return self.monitor._health('review-required', 'exit-handoff-requires-review')
+            return result
 
     def __exit__(self, *unused):
         # A failed SDK/process cleanup must not leak the account lease or database.
