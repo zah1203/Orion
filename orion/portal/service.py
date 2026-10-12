@@ -19,6 +19,35 @@ class Accounts:
             str(self.store.account_dir(uid) / "paper.db"), self.store.config(uid), master, synthetic
         )
 
+    def capital(self, uid):
+        """One read snapshot, no Engine construction or production mutation."""
+        from .capital import reconcile
+        with self.store.lock(uid):
+            user = self.store.user(uid)
+            path = self.store.account_dir(uid) / 'paper.db'
+            if not path.exists():
+                return dict(status='not-started', adjustments=[], issues=[],
+                            order_submission_available=False)
+            if any(p.is_symlink() for p in (path, *path.parents)):
+                raise ValueError('Paper ledger requires review')
+            try:
+                with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                    db.execute('PRAGMA query_only=ON')
+                    db.execute('BEGIN')
+                    row = db.execute('SELECT body FROM state WHERE id=1').fetchone()
+                    if not row:
+                        raise ValueError
+                    state = json.loads(row[0])
+                    records = [dict(seq=r[0], at=r[1], event=r[2], body=json.loads(r[3]))
+                               for r in db.execute("SELECT seq,at,event,body FROM audit WHERE event IN "
+                                   "('PAPER_BALANCE_ADJUSTED','PAPER_BUY','PAPER_EXIT','TARGET_REACHED') ORDER BY seq")]
+            except (sqlite3.Error, ValueError, TypeError):
+                raise ValueError('Paper ledger cannot be reconciled; review required') from None
+        try:
+            return reconcile(state, records, user['settings']['paper_cash'])
+        except (ValueError, KeyError, TypeError, ArithmeticError):
+            raise ValueError('Paper ledger cannot be reconciled; review required') from None
+
     def summary(self, uid):
         with self.store.lock(uid):
             user = self.store.user(uid)

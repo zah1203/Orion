@@ -22,6 +22,7 @@ import {
 } from "../components/Desk";
 import Performance from "../components/Performance";
 import LivePilot from "../components/LivePilot";
+import Capital from "../components/Capital";
 import { api, login, logout, register, restore } from "../lib/api";
 import {
   phoneAlertsSupported,
@@ -491,6 +492,7 @@ export default function App() {
                     Account totals · since account started
                   </Text>
                   <Metrics p={selected.pnl.totals} />
+                  <Capital key={selected.id} uid={selected.id} />
                   <Performance key={selected.id} userId={selected.id} />
                   <Text style={s.note}>
                     {selected.access} ·{" "}
@@ -554,6 +556,7 @@ export default function App() {
               {!selected && tab === "Home" && (
                 <>
                   <Portfolio me={me} />
+                  <Capital key={me.id} />
                   <Card
                     title={
                       me.enabled && me.worker_online
@@ -1001,6 +1004,7 @@ export default function App() {
                     />
                   </Card>
                   <Card title="Adjust virtual cash">
+                    <Text style={s.note}>This replaces your current available cash. Earlier profits stay in history and are not added to the entered amount. To add funds, enter current cash plus the amount you want to add.</Text>
                     {field("balance", "New available paper cash ₹")}
                     {field("reason", "Reason for adjustment")}
                     <Button

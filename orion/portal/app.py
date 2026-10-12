@@ -336,6 +336,23 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
         uid=identity(request)["user_id"]
         return performance_result(uid,period,instrument,start,end,group_by)
 
+    def capital_result(uid):
+        try:
+            return accounts.capital(uid)
+        except ValueError:
+            raise HTTPException(409, 'Paper ledger cannot be reconciled; review required') from None
+
+    @app.get('/api/paper-capital')
+    def own_capital(request: Request):
+        return capital_result(identity(request)['user_id'])
+
+    @app.get('/api/admin/users/{uid}/paper-capital')
+    def user_capital(uid: str, request: Request):
+        owner(request)
+        if uid not in {u['id'] for u in store.users()}:
+            raise HTTPException(404, 'User not found')
+        return capital_result(uid)
+
     @app.get("/api/admin/users/{uid}/performance")
     def user_performance(uid: str, request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day"):
         owner(request)

@@ -96,8 +96,15 @@ No production workers or accounts are changed by developing or merging code.
 
 ## Required work still open in this same PR
 
+The preparation release was merged and portal-only deployment of `9df1188`
+succeeded on October 11, 2026 (Actions run `38154307925`). That deployment verified
+portal health and unchanged Paper worker identities; it did not activate Live.
+The remaining requirements below are release blockers, not a claim that PR #28
+is still open.
+
 | Requirement | Current status | Acceptance evidence |
 | --- | --- | --- |
+| Paper capital and historical accounting reconciliation | On-demand read-only report implemented; actual account result still requires review | See [Paper capital reconciliation](paper-capital.md); no balance reset or worker restart |
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
 | Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; receive-only Telegram admission implemented; bounded REST quote reader implemented; trusted market status, combined execution worker and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending; account wrapper can hand off final exposure to exit management without releasing its lease |
 | Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; target/trailing coordinator implemented; production signal policy binding and reviewed gap response still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
