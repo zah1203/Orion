@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
 import { api } from "../lib/api";
 
-type Review = { day: string; opening_cash: string; reviewed_at: string };
-const confirmation = "DEPOSITED CASH ONLY; NO EXTERNAL TRADES OR WITHDRAWALS; FEES ARE ESTIMATES";
+type Review = { day: string; opening_cash: string; reviewed_at: string; model?: string };
+const confirmation = "DEPOSITED CASH ONLY; NO EXTERNAL TRADES OR WITHDRAWALS; FEES ARE ESTIMATES; REUSE RECONCILED NSE OPTION SALE PROCEEDS";
 
 export default function LiveFinance({ uid }: { uid: string }) {
   const [cash, setCash] = useState("");
@@ -32,14 +32,14 @@ export default function LiveFinance({ uid }: { uid: string }) {
   return <View style={s.card}>
     <Text style={s.title}>Your daily Live cash allocation</Text>
     <Text style={s.text}>Choose an amount no higher than your settled deposited cash and reviewed capital limit. Do not include collateral, unsettled sale proceeds or credit. This is a spending cap, not a broker balance check.</Text>
-    <Text style={s.text}>Review before the first trade, with a flat account and fresh Live monitoring. No same-day increase or reset is allowed. Sales do not refill this allocation. Previous days’ charges must be reconciled first.</Text>
-    {review && <Text style={s.text}>Last recorded allocation: ₹{review.opening_cash} for {review.day} (India time). This record alone does not confirm today’s eligibility.</Text>}
+    <Text style={s.text}>Review before the first trade, with a flat account and fresh Live monitoring. No same-day increase or reset is allowed. For new reviews, confirmed NSE option sales can restore the reserved purchase amount after complete book and fill reconciliation, less losses and retained fees. Profits do not increase the allocation. Older opening-only reviews cannot be upgraded during the same day. Previous days’ charges must be reconciled first.</Text>
+    {review && <Text style={s.text}>Last recorded allocation: ₹{review.opening_cash} for {review.day} (India time). Model: {review.model === "nse-option-reconciled-v1" ? "reconciled NSE principal reuse" : "opening allocation only"}. This record alone does not confirm today’s eligibility.</Text>}
     <TextInput accessibilityLabel="Opening deposited cash allocation in rupees" value={cash}
       onChangeText={(value) => { setCash(value); setConfirmed(false); }} keyboardType="decimal-pad"
       maxLength={30} editable={!busy} style={s.input} placeholder="Opening allocation (₹)" placeholderTextColor="#93a8bd" />
     <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: confirmed }} disabled={busy}
       onPress={() => setConfirmed(!confirmed)} style={s.input}>
-      <Text style={s.text}>{confirmed ? "✓ " : "○ "}I reviewed this amount against my broker records. I use deposited cash only, will make no outside trades or withdrawals while Orion runs, and accept the reviewed fee reserve as an estimate. Actual charges can be higher.</Text>
+      <Text style={s.text}>{confirmed ? "✓ " : "○ "}I reviewed this amount against my broker records. I use deposited cash only, will make no outside trades or withdrawals while Orion runs, and accept the reviewed fee reserve as an estimate. Actual charges can be higher. I allow reuse of reconciled NSE option sale proceeds within this allocation.</Text>
     </Pressable>
     <Pressable accessibilityRole="button" disabled={busy || !confirmed || !cash.trim()}
       onPress={() => { void submit(); }} style={[s.button, (busy || !confirmed || !cash.trim()) && { opacity: 0.4 }]}>

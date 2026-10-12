@@ -32,11 +32,18 @@ const fields = [
   ["target_timeout_seconds", "Target order timeout (seconds, 1–60)"],
 ];
 
+const preferenceKeys = ["capital", "max_trade_loss", "daily_loss", "max_lots", "max_entries"];
+const simpleFields = preferenceKeys.map((key) => fields.find(([name]) => name === key)!);
+
 export default function LivePilot({ owner, uid, users = [] }: {
   owner: boolean; uid: string; users?: { id: string; username: string; access: string }[];
 }) {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [target, setTarget] = useState(uid);
+  const [advanced, setAdvanced] = useState(false);
+  const [loadedPreferencesKey, setLoadedPreferencesKey] = useState("");
+  const preferencesKey = uid + ":" + target;
+  const preferencesLoaded = advanced || loadedPreferencesKey === preferencesKey;
   const [values, setValues] = useState<Record<string, string>>({});
   const [healthResult, setHealth] = useState<{ key: string; value: Health } | null>(null);
   const healthPath = owner ? "/admin/live/health/" + target : "/live/health";
@@ -65,6 +72,18 @@ export default function LivePilot({ owner, uid, users = [] }: {
     const timer = setInterval(() => { void refresh(); }, 20000);
     return () => { mounted = false; clearInterval(timer); };
   }, [healthPath, healthKey]);
+  useEffect(() => {
+    let mounted = true;
+    if (owner && !advanced) {
+      api("/admin/live/risk-preferences/" + target).then((result) => {
+        if (mounted) {
+          setValues(Object.fromEntries(Object.entries({ ...(result.preferences || {}), ...(result.execution || {}) }).map(([k, v]) => [k, String(v)])));
+          setLoadedPreferencesKey(preferencesKey);
+        }
+      }).catch(() => { if (mounted) setError("Saved Live preferences could not be loaded. Retry before editing."); });
+    }
+    return () => { mounted = false; };
+  }, [owner, target, advanced, preferencesKey]);
   async function run(work: () => Promise<void>) {
     setBusy(true); setError(""); setNotice("");
     try { await work(); setPolicy(await api("/live/pilot")); }
@@ -121,26 +140,60 @@ export default function LivePilot({ owner, uid, users = [] }: {
       </View>}
     </> : null}
     {owner ? <>
-      <Text style={s.title}>Configure the two-account pilot</Text>
-      <Text style={s.text}>Select an approved account and enter its own limits. Saving requires that account to review again. The stop-limit gap is the number of ticks below the stop trigger for a sell limit; it does not guarantee a fill. The timeout starts when a target sell is requested.</Text>
+      <Text style={s.title}>Your Live risk settings</Text>
+      <Text style={s.text}>Select an account and save five risk preferences. These are saved for setup only: they do not replace an active policy, enroll the account or start trading. Paper settings stay unchanged.</Text>
+      <Text style={s.text}>Lots and entries are maximums, not targets. A trade may be smaller or skipped when cash or the remaining daily loss budget is insufficient. Real losses can exceed planned limits.</Text>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setAdvanced(!advanced); setValues({}); setLoadedPreferencesKey(""); setNotice(""); setError(""); }}>
+        <Text style={s.text}>{advanced ? "Back to five risk preferences" : "Advanced execution policy"}</Text>
+      </Pressable>
+      {advanced && <Text style={s.text}>This separate complete policy requires all execution settings and account review. It does not automatically use saved preferences. The stop-limit gap does not guarantee a fill; target timeout starts when a target sell is requested.</Text>}
       {users.filter((u) => u.access === "approved").map((u) => <Pressable key={u.id} accessibilityRole="button"
         accessibilityState={{ selected: target === u.id }} disabled={busy}
-        onPress={() => { setTarget(u.id); setValues({}); }} style={s.input}>
+        onPress={() => { if (target === u.id) return; setTarget(u.id); setValues({}); setLoadedPreferencesKey(""); setNotice(""); setError(""); }} style={s.input}>
         <Text style={s.text}>{target === u.id ? "✓ " : ""}{u.username}</Text>
       </Pressable>)}
-      {fields.map(([key, label]) => <View key={key} style={{ gap: 5 }}>
+      {(advanced ? fields : simpleFields).map(([key, label]) => <View key={key} style={{ gap: 5 }}>
         <Text style={s.text}>{label}</Text>
         <TextInput accessibilityLabel={label} value={values[key] || ""}
-          keyboardType="decimal-pad" editable={!busy} style={s.input}
+          keyboardType="decimal-pad" editable={!busy && preferencesLoaded} style={s.input}
           onChangeText={(value) => setValues((old) => ({ ...old, [key]: value }))} />
       </View>)}
-      {button("Save selected account’s pilot limits", async () => {
+      {button(advanced ? "Save selected account’s execution policy" : "Save five Live risk preferences", async () => {
+        if (!preferencesLoaded) throw new Error("Wait for saved preferences to load.");
+        if (!advanced) {
+          if (simpleFields.some(([key]) => !values[key]?.trim())) throw new Error("Enter all five risk preferences.");
+          const limits = Object.fromEntries(preferenceKeys.map((key) => [key,
+            key === "max_lots" || key === "max_entries" ? Number(values[key]) : values[key].trim()]));
+          await api("/admin/live/risk-preferences/" + target, { limits }, "PUT");
+          setNotice("Five preferences saved for setup. They are not applied to trading. Live remains locked; Paper settings are unchanged.");
+          return;
+        }
         if (fields.some(([key]) => !values[key]?.trim())) throw new Error("Enter every pilot limit.");
         const limits = { ...values, max_lots: Number(values.max_lots), max_entries: Number(values.max_entries),
           stop_gap_ticks: Number(values.stop_gap_ticks), target_timeout_seconds: Number(values.target_timeout_seconds) };
         await api("/admin/live/pilot/" + target, { limits }, "PUT");
         setNotice("Pilot limits saved. The selected account must review them."); setValues({});
       })}
+      {!advanced && <>
+        <Text style={s.title}>Apply these five values</Text>
+        <Text style={s.text}>Order and total open premium caps will equal capital; combined planned open risk will equal the daily loss limit. Cash, fees and remaining loss budget still reduce trade size. Applying creates a new policy that the account must review.</Text>
+        <Text style={s.text}>Before the first application, enter the reviewed execution assumptions below. These cannot be inferred from Paper profits or your five risk values. The fee reserve is an estimate per trade; a stop-limit gap does not guarantee an exit fill.</Text>
+        {fields.filter(([key]) => ["fee_reserve", "stop_gap_ticks", "target_timeout_seconds"].includes(key)).map(([key, label]) => <View key={key} style={{ gap: 5 }}>
+          <Text style={s.text}>{label}</Text>
+          <TextInput accessibilityLabel={label} value={values[key] || ""} keyboardType="decimal-pad"
+            editable={!busy && preferencesLoaded} style={s.input}
+            onChangeText={(value) => setValues((old) => ({ ...old, [key]: value }))} />
+        </View>)}
+        {button("Apply five values and reviewed execution settings", async () => {
+          if (!preferencesLoaded) throw new Error("Wait for saved preferences to load.");
+          const keys = [...preferenceKeys, "fee_reserve", "stop_gap_ticks", "target_timeout_seconds"];
+          if (keys.some((key) => !values[key]?.trim())) throw new Error("Enter five risk values and the reviewed fee and exit settings.");
+          const counts = ["max_lots", "max_entries", "stop_gap_ticks", "target_timeout_seconds"];
+          const limits = Object.fromEntries(keys.map((key) => [key, counts.includes(key) ? Number(values[key]) : values[key].trim()]));
+          await api("/admin/live/simple-policy/" + target, { limits }, "PUT");
+          setNotice("Derived policy saved. The selected account must review it. Live remains locked.");
+        })}
+      </>}
       {button("Revoke selected account’s enrollment", async () => {
         await api("/admin/live/pilot/" + target + "/revoke", {});
         setNotice("Selected account’s pilot enrollment revoked.");

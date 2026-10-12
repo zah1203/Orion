@@ -123,7 +123,7 @@ class Ledger:
         # Only closes the entry gate. No liquidation or order cancellations.
         self.db.execute("UPDATE control SET paused=1 WHERE id=1")
 
-    def _check_incidents(self):
+    def _check_incidents(self, *, allow_protected=False):
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_commands'").fetchone():
             if self.db.execute("SELECT 1 FROM broker_commands WHERE status IN ('SENDING','UNKNOWN') OR (operation='cancel' AND status!='CONFIRMED')").fetchone():
                 raise Refused('Broker command requires reconciliation')
@@ -132,6 +132,10 @@ class Ledger:
             require_current(self)
         if self.db.execute("SELECT 1 FROM live_incidents LIMIT 1").fetchone():
             raise Refused("Live incident requires review")
+        if allow_protected:
+            from .admission import protected_book
+            protected_book(self)
+            return
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='protective_exits'").fetchone():
             if self.db.execute("SELECT 1 FROM intents i WHERE i.filled > (SELECT COALESCE(SUM(e.filled),0) FROM protective_exits e WHERE e.entry_tag=i.tag)").fetchone():
                 raise Refused("Exposure requires protection review")
@@ -145,7 +149,7 @@ class Ledger:
             self.db.execute("UPDATE control SET paused=0 WHERE id=1")
 
     def reserve(self, *, event, symbol, segment, lots, lot_size, limit_price, tick_size,
-                signal_time, quote_time, now, limits, realized_loss):
+                signal_time, quote_time, now, limits, realized_loss, allow_protected=False):
         """Reserve full entry premium, not merely intended stop-loss risk.
 
         Loss is an injected development snapshot, not broker-verified live data.
@@ -180,7 +184,7 @@ class Ledger:
                 if prior["body"] != encoded:
                     raise Refused("Duplicate event changed")
                 return dict(prior)
-            self._check_incidents()
+            self._check_incidents(allow_protected=allow_protected)
             if self.db.execute("SELECT paused FROM control WHERE id=1").fetchone()[0]:
                 raise Refused("Entries paused")
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():

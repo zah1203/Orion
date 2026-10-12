@@ -98,7 +98,7 @@ class LiveWorkerStop(Strict):
 
 class LiveEntryReview(Strict):
     policy_version: int = Field(strict=True, gt=0)
-    confirmation: Literal["AUTHORIZE AUTOMATIC LIVE ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS"]
+    confirmation: Literal["AUTHORIZE AUTOMATIC LIVE PORTFOLIO ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS"]
 
 
 class LiveManual(Strict):
@@ -111,7 +111,7 @@ class LiveManual(Strict):
 
 class LiveCash(Strict):
     opening_cash: str = Field(min_length=1, max_length=30)
-    confirmation: Literal["DEPOSITED CASH ONLY; NO EXTERNAL TRADES OR WITHDRAWALS; FEES ARE ESTIMATES"]
+    confirmation: Literal["DEPOSITED CASH ONLY; NO EXTERNAL TRADES OR WITHDRAWALS; FEES ARE ESTIMATES", "DEPOSITED CASH ONLY; NO EXTERNAL TRADES OR WITHDRAWALS; FEES ARE ESTIMATES; REUSE RECONCILED NSE OPTION SALE PROCEEDS"]
 
 
 class LiveStatement(Strict):
@@ -426,6 +426,27 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
     @app.get("/api/live/pilot")
     def pilot_status(request: Request):
         return pilot.status(identity(request)["user_id"])
+
+    @app.get("/api/admin/live/risk-preferences/{uid}")
+    def live_risk_preferences(uid: str, request: Request):
+        try:
+            return pilot.preferences(owner(request), uid)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.put("/api/admin/live/risk-preferences/{uid}")
+    def save_live_risk_preferences(uid: str, body: PilotPolicy, request: Request):
+        try:
+            return pilot.preferences(owner(request, True), uid, body.limits)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.put("/api/admin/live/simple-policy/{uid}")
+    def configure_simple_pilot(uid: str, body: PilotPolicy, request: Request):
+        try:
+            return pilot.configure_simple(owner(request, True), uid, body.limits)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.put("/api/admin/live/pilot/{uid}")
     def configure_pilot(uid: str, body: PilotPolicy, request: Request):

@@ -2,7 +2,7 @@
 
 Only evaluate() is available in this release. submit() has no user override;
 tests exercise its atomic handoff with synthetic sessions and a patched gate.
-Activation additionally requires account-owned, one-shot entry permission.
+Activation additionally requires account-owned portfolio-session permission and a one-shot send journal.
 """
 from datetime import datetime, timezone
 import json

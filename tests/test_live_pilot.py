@@ -93,3 +93,65 @@ class PilotTests(unittest.TestCase):
         self.store.set_access(self.owner, self.user, 'suspended')
         self.assertFalse(self.pilot.status(self.user)['enrolled'])
         self.assertEqual(self.store.user(self.user)['settings'], before)
+
+    def test_five_preferences_persist_without_enrollment_or_policy_changes(self):
+        values = dict(capital='200000', max_trade_loss='10000', daily_loss='15000', max_lots=5, max_entries=15)
+        before = self.store.user(self.owner)['settings']
+        path = '/api/admin/live/risk-preferences/' + self.owner
+        result = self.client.put(path, json={'limits': values}, headers=self.headers)
+        self.assertEqual(result.status_code, 200)
+        self.assertFalse(result.json()['applied'])
+        self.assertEqual(self.client.get(path).json()['preferences'], values)
+        self.assertFalse(self.pilot.status(self.owner)['enrolled'])
+        self.assertEqual(self.store.user(self.owner)['settings'], before)
+        self.assertFalse(list(Path(self.temp.name).rglob('live.db')))
+        self.pilot.configure(self.owner, self.owner, LIMITS)
+        self.pilot.consent(self.owner, 1)
+        policy = self.pilot.status(self.owner)
+        self.client.put(path, json={'limits': values | dict(max_lots=4)}, headers=self.headers)
+        self.assertEqual(self.pilot.status(self.owner), policy)
+        self.assertEqual(Pilot(self.store).preferences(self.owner, self.owner)['preferences']['max_lots'], 4)
+
+    def test_preferences_require_owner_csrf_and_valid_five_values(self):
+        values = dict(capital='200000', max_trade_loss='10000', daily_loss='15000', max_lots=5, max_entries=15)
+        path = '/api/admin/live/risk-preferences/' + self.user
+        self.assertEqual(self.client.put(path, json={'limits': values}).status_code, 403)
+        for invalid in (values | dict(max_lots=True), values | dict(max_lots=1.5),
+                        values | dict(daily_loss='500'), values | dict(capital='NaN'),
+                        values | dict(fee_reserve='100'), {'capital':'200000'}):
+            self.assertEqual(self.client.put(path, json={'limits':invalid}, headers=self.headers).status_code, 409)
+        self.assertIsNone(self.client.get(path).json()['preferences'])
+        self.login('newuser')
+        self.assertEqual(self.client.get(path).status_code, 403)
+        self.assertEqual(self.client.put(path, json={'limits':values}, headers=self.headers).status_code, 403)
+
+    def test_simple_policy_derives_caps_and_invalidates_old_review(self):
+        values = dict(capital='200000', max_trade_loss='10000', daily_loss='15000',
+                      max_lots=5, max_entries=15, fee_reserve='10',
+                      stop_gap_ticks=1, target_timeout_seconds=10)
+        path = '/api/admin/live/simple-policy/' + self.user
+        before = self.store.user(self.user)['settings']
+        self.assertEqual(self.client.put(path, json={'limits':values}).status_code, 403)
+        result = self.client.put(path, json={'limits':values}, headers=self.headers)
+        self.assertEqual(result.status_code, 200)
+        limits = result.json()['limits']
+        self.assertEqual(limits['max_order_premium'], '200000')
+        self.assertEqual(limits['max_open_premium'], '200000')
+        self.assertEqual(limits['max_open_risk'], '15000')
+        self.assertFalse(result.json()['order_submission_available'])
+        self.pilot.consent(self.user, 1)
+        self.client.put(path, json={'limits':values | dict(max_lots=4)}, headers=self.headers)
+        self.assertFalse(self.pilot.status(self.user)['reviewed'])
+        self.assertEqual(self.pilot.status(self.user)['version'], 2)
+        self.assertEqual(self.store.user(self.user)['settings'], before)
+        self.assertFalse(list(Path(self.temp.name).rglob('live.db')))
+        prefs = self.pilot.preferences(self.owner, self.user)
+        self.assertEqual(prefs['execution'], {k:values[k] for k in ('fee_reserve', 'stop_gap_ticks', 'target_timeout_seconds')})
+        self.assertEqual(self.pilot.preferences(self.owner, self.owner)['execution'], {})
+        for invalid in ({k:v for k,v in values.items() if k != 'fee_reserve'},
+                        values | dict(max_trade_loss='16000'), values | dict(stop_gap_ticks=True),
+                        values | dict(max_open_premium='1')):
+            self.assertEqual(self.client.put(path, json={'limits':invalid}, headers=self.headers).status_code, 409)
+        self.assertEqual(self.pilot.status(self.user)['version'], 2)
+        self.login('newuser')
+        self.assertEqual(self.client.put(path, json={'limits':values}, headers=self.headers).status_code, 403)
