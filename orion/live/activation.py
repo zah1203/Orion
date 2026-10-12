@@ -68,6 +68,8 @@ def preflight(store, uid, version):
 
 
 class ActivationMonitor(ReviewedAccountMonitor):
+    _portfolio = True
+
     def _authenticate(self):
         from .authorization import EntryAuthority
         from .startup import EntryCheckedSession

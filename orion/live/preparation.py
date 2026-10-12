@@ -52,7 +52,7 @@ class EntryPreparation:
             tick_size=candidate['tick'], signal_time=datetime.fromisoformat(signal[0]),
             quote_time=quote['quoted_at'], now=datetime.now(timezone.utc),
             limits=Limits(limits['max_lots'], limits['max_entries'], limits['max_open_premium'], limits['daily_loss']),
-            realized_loss=candidate['risk']['loss_used'])
+            realized_loss=candidate['risk']['loss_used'], allow_protected=True)
         tag = row['tag']
         self.reconciliation.bind_instrument(tag, product='NRML', token=candidate['token'])
         self.accounting.bind_multiplier(tag, 1)

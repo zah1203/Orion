@@ -56,7 +56,8 @@ def snapshot(store, uid):
                 raise Refused('Finance account mismatch')
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='daily_cash_allocations'").fetchone():
                 return empty
-            row = db.execute('SELECT day,reviewed_at,opening_cash FROM daily_cash_allocations ORDER BY day DESC LIMIT 1').fetchone()
+            has_model = 'model' in {r[1] for r in db.execute('PRAGMA table_info(daily_cash_allocations)')}
+            row = db.execute('SELECT day,reviewed_at,opening_cash,' + ('model' if has_model else "'opening-only' AS model") + ' FROM daily_cash_allocations ORDER BY day DESC LIMIT 1').fetchone()
             return empty | dict(latest_cash_review=dict(row) if row else None)
     except sqlite3.Error:
         raise Refused('Finance snapshot unavailable') from None

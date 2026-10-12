@@ -85,11 +85,13 @@ class EntryPermissionTests(unittest.TestCase):
     def test_legacy_permission_is_never_upgraded(self):
         with self.account() as a:
             c = self.coordinator(a)
-            c.db.execute("UPDATE entry_permission SET scope='one-entry'")
-            with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
-                self.assertFalse(c.authority.allowed())
-                with self.assertRaises(Refused): c.authority.resume_when_flat()
-            self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0], 0)
+            for scope in ('one-entry', 'session'):
+                c.db.execute("UPDATE entry_permission SET scope=?,active=1", (scope,))
+                with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
+                    self.assertFalse(c.authority.allowed())
+                    with self.assertRaises(Refused): c.authority.resume_when_flat()
+                    with self.assertRaises(Refused): c.authority.resume_when_protected()
+                self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0], 0)
 
     def test_flat_internal_pause_resumes_same_grant_but_revocation_does_not(self):
         with self.account() as a:
@@ -159,3 +161,43 @@ class EntryPermissionTests(unittest.TestCase):
                 self.assertEqual(self.session.operations.count('place'), 2)
                 self.assertEqual(c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0], nonce)
                 self.assertEqual(c.db.execute('SELECT COUNT(DISTINCT nonce) FROM entry_dispatch_permission').fetchone()[0], 1)
+
+    def test_second_buy_requires_confirmed_protection_and_preserves_session(self):
+        from orion.live.strategy import ExitStrategy
+        from orion.live.portfolio import PortfolioMonitor
+        from test_live_execution import report
+        self.message()
+        with self.account() as a:
+            c = self.coordinator(a)
+            with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
+                c.submit(CHANNEL+':1')
+                tag = c.db.execute('SELECT tag FROM intents').fetchone()[0]
+                a.ledger.reconcile(tag,account=a.uid,broker_id='broker1',symbol='NIFTYTESTCE',quantity=10,status='FILLED',filled=10,average='100')
+                c.preparation.accounting.record(account=a.uid,ucc=a.session.ucc,trade_id='buy1',broker_id='broker1',
+                    segment='nse_fo',symbol='NIFTYTESTCE',side='BUY',quantity=10,price='100',fee='0',executed_at=datetime.now(timezone.utc))
+                c.db.execute("UPDATE broker_commands SET status='CONFIRMED'")
+                c.db.execute("INSERT INTO protective_exits VALUES('stop1',?,10,'90','OPEN','stopbroker',0)",(tag,))
+                c.db.execute("INSERT INTO exit_terms VALUES('stop1','89.95')")
+                ExitStrategy(a.ledger,a.session).bind(tag,targets=['110','120','130'],stop_limit='89.95',target_timeout=10)
+                now = datetime.now(timezone.utc)
+                buy = dict(actId=a.session.ucc,nOrdNo='broker1',exSeg='nse_fo',prod='NRML',tok='123',trdSym='NIFTYTESTCE',qty=10,fldQty=10,ordSt='complete',trnsTp='B',avgPrc='100',prc='101',trgPrc='0',prcTp='L')
+                stop = buy | dict(nOrdNo='stopbroker',trnsTp='S',fldQty=0,ordSt='trigger pending',avgPrc='0',prc='89.95',trgPrc='90',prcTp='SL')
+                position = dict(actId=a.session.ucc,exSeg='nse_fo',prod='NRML',tok='123',trdSym='NIFTYTESTCE',cfBuyQty=0,cfSellQty=0,flBuyQty=10,flSellQty=0)
+                c.preparation.reconciliation.compare(report(buy,stop),report(position),started_at=now,completed_at=now,complete=True)
+                c.authority.resume_when_protected()
+                nonce = c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0]
+                self.message(message_id=2)
+                original = self.session.request
+                def second(operation, **kwargs):
+                    if operation == 'place':
+                        self.session.operations.append('place')
+                        return {'broker_id':'broker2'}
+                    return original(operation, **kwargs)
+                self.session.request = second
+                c.submit(CHANNEL+':2')
+                self.assertEqual(self.session.operations.count('place'),2)
+                self.assertEqual(c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0],nonce)
+                a.monitor = PortfolioMonitor(a.ledger,a.session)
+                a.monitor._health('observed','none')
+                self.assertEqual(EntryWorker(a).cycle(),'monitoring-first')
+                self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0],1)

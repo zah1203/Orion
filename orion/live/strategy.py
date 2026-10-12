@@ -95,7 +95,7 @@ class ExitStrategy(ProtectionMonitor):
         self.commands.place('STOP', row['tag'], stop_limit=str(trigger-amount(plan['stop_gap'])))
         return self._health('awaiting-broker', 'strategy-protection-requested')
 
-    def cycle(self, *, marks):
+    def cycle(self, *, marks, _snapshot=None, _entries=None):
         """Marks are explicit test/integration inputs, not trusted production quotes.
 
         Stale quotes cannot trigger targets or trailing moves. Existing exits are
@@ -103,7 +103,7 @@ class ExitStrategy(ProtectionMonitor):
         A stop-limit gap is escalated; this class never chooses a new market price.
         """
         try:
-            snapshot = self.session.request('evidence' if self.collect_trades else 'snapshot')
+            snapshot = _snapshot if _snapshot is not None else self.session.request('evidence' if self.collect_trades else 'snapshot')
             if self.collect_trades:
                 self.observations.ingest_evidence(snapshot)
             else:
@@ -118,7 +118,10 @@ class ExitStrategy(ProtectionMonitor):
             # Unknown commands cannot authorize replacement capacity after restart.
             if self.db.execute("SELECT 1 FROM broker_commands WHERE status IN ('SENDING','UNKNOWN')").fetchone():
                 return self._health('review-required', 'unknown-command')
-            for entry in self.db.execute('SELECT * FROM intents ORDER BY rowid').fetchall():
+            entries = self.db.execute('SELECT * FROM intents ORDER BY rowid').fetchall() if _entries is None else [self.ledger.get(tag) for tag in _entries]
+            self._last_processed = None
+            for entry in entries:
+                self._last_processed = entry['tag']
                 if entry['status'] in ('OPEN','PARTIAL'):
                     # The base monitor handles partial-entry protection. Do not
                     # overlap coordinators or bind a strategy to changing sizing.

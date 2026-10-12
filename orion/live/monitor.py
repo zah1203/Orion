@@ -79,7 +79,7 @@ class ProtectionMonitor:
             health_event(self.ledger, state, uncovered)
         return self.health()
 
-    def cycle(self, *, entries_allowed=False, marks=None):
+    def cycle(self, *, entries_allowed=False, marks=None, _snapshot=None, _managed=()):
         """Read/reconcile, then at most one durable command; never sends entries.
 
         False is the default and cancels outstanding entries even without fills.
@@ -90,10 +90,10 @@ class ProtectionMonitor:
             raise Refused('Explicit entry state required')
         try:
             if self.collect_trades:
-                snapshot = self.session.request('evidence')
+                snapshot = _snapshot if _snapshot is not None else self.session.request('evidence')
                 self.observations.ingest_evidence(snapshot)
             else:
-                snapshot = self.session.request('snapshot')
+                snapshot = _snapshot if _snapshot is not None else self.session.request('snapshot')
                 self.observations.ingest_snapshot(snapshot)
             if not entries_allowed:
                 self.ledger.pause()
@@ -112,7 +112,7 @@ class ProtectionMonitor:
                     if not prior:
                         self.commands.cancel('ENTRY', entry['tag'])
                         return self._health('awaiting-broker', 'entry-cancel-requested')
-                if not entry['filled']:
+                if not entry['filled'] or entry['tag'] in _managed:
                     continue
                 exits = self.db.execute('SELECT * FROM protective_exits WHERE entry_tag=?', (entry['tag'],)).fetchall()
                 if any(r['status'] in ('PREPARED','DISPATCHING','UNKNOWN','CANCEL_PENDING') for r in exits):
@@ -167,6 +167,10 @@ class AccountMonitor:
             if self.strategy:
                 from .strategy import ExitStrategy
                 manager = ExitStrategy
+            if getattr(self, '_portfolio', False):
+                from .portfolio import PortfolioMonitor
+                manager = PortfolioMonitor
+                self.strategy = False
             self.monitor = manager(self.ledger, self.session, collect_trades=self.collect_trades)
             return self
         except BaseException:
@@ -213,7 +217,7 @@ class AccountMonitor:
 
     @property
     def needs_quotes(self):
-        return self.strategy or bool(self.ledger and self.ledger.db.execute(
+        return getattr(self.monitor, 'portfolio', False) or self.strategy or bool(self.ledger and self.ledger.db.execute(
             "SELECT 1 FROM manual_requests WHERE action='EXIT' AND state='PENDING'").fetchone())
 
     def request_manual(self, **instruction):
@@ -230,6 +234,8 @@ class AccountMonitor:
         # Missing or expired one-shot permission closes outstanding entry orders;
         # confirmed exposure retains protective management.
         with self.store.lock(self.uid):
+            if getattr(self.monitor, 'portfolio', False):
+                return self.monitor.cycle(marks=marks or {}, entries_allowed=self._entries_allowed())
             if self.strategy:
                 return self.monitor.cycle(marks={} if marks is None else marks)
             result = self.monitor.cycle(entries_allowed=self._entries_allowed())

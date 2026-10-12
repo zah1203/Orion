@@ -29,13 +29,13 @@ def assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, poli
     limits = validate_limits(limits)
     now = timestamp(now)
     require_current(ledger)
-    # Existing exposure still requires protection review. A calculated budget
-    # must not silently weaken the ledger's conservative admission gate.
-    ledger._check_incidents()
+    # Additional exposure requires complete observed stop coverage and stable
+    # per-position exit plans, not merely a calculated account budget.
+    ledger._check_incidents(allow_protected=True)
     for _, marked_at in marks.values():
         if not 0 <= (now-timestamp(marked_at)).total_seconds() <= 5:
             raise Refused('Fresh risk marks required')
-    cash_snapshot = cash.balance(policy=policy, now=now) if cash is not None else None
+    cash_snapshot = cash.balance(policy=policy, now=now, marks=marks) if cash is not None else None
     summary = (accounting.estimate_budget(now=now, marks=marks, fee_reserve=limits['fee_reserve'])
                if cash is not None else accounting.summary(now=now, marks=marks))
     day = now.astimezone(IST).date().isoformat()

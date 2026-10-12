@@ -10,7 +10,7 @@ from .ledger import Refused
 from .reconciliation import fingerprint
 from .routing import reviewed_policy
 
-CONFIRMATION = "AUTHORIZE AUTOMATIC LIVE ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS"
+CONFIRMATION = "AUTHORIZE AUTOMATIC LIVE PORTFOLIO ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS"
 
 
 def install(db):
@@ -72,7 +72,7 @@ def review(ledger, store, uid, *, policy_version, confirmation):
         if accounting.estimate_budget(now=now, marks={}, fee_reserve=policy['limits']['fee_reserve'])['open_quantities']:
             raise Refused('Authorization requires a flat account')
         cash.balance(policy=policy, now=now)
-        ledger.db.execute("INSERT OR REPLACE INTO entry_permission(id,nonce,worker_session,day,policy_digest,active,reviewed_at,scope) VALUES(1,?,?,?,?,1,?,'session')",
+        ledger.db.execute("INSERT OR REPLACE INTO entry_permission(id,nonce,worker_session,day,policy_digest,active,reviewed_at,scope) VALUES(1,?,?,?,?,1,?,'portfolio-session')",
             (uuid.uuid4().hex,checked['session'],now.astimezone(IST).date().isoformat(),digest(policy),now.isoformat()))
         ledger.db.execute('UPDATE control SET paused=0 WHERE id=1')
         return dict(authorized=True, day=now.astimezone(IST).date().isoformat())
@@ -101,7 +101,7 @@ class EntryAuthority:
         row = ledger.db.execute('SELECT * FROM entry_permission WHERE id=1').fetchone()
         policy = reviewed_policy(a.store, a.uid, a.session.ucc)
         now = datetime.now(timezone.utc)
-        if (not row or row['active'] != 1 or row['scope'] != 'session' or row['worker_session'] != ledger.session or
+        if (not row or row['active'] != 1 or row['scope'] != 'portfolio-session' or row['worker_session'] != ledger.session or
                 row['day'] != now.astimezone(IST).date().isoformat() or
                 row['policy_digest'] != digest(policy) or datetime.fromisoformat(row['reviewed_at']) > now or
                 (not allow_paused and ledger.db.execute('SELECT paused FROM control WHERE id=1').fetchone()[0])):
@@ -135,6 +135,19 @@ class EntryAuthority:
                     datetime.now(timezone.utc)-datetime.fromisoformat(source[1])).total_seconds() <= 30:
                 raise Refused('Fresh connected signal source required')
             ledger.db.execute('UPDATE control SET paused=0 WHERE id=1')
+
+    def resume_when_protected(self):
+        """Continue an existing grant only at a fully protected portfolio boundary."""
+        self.require(allow_paused=True)
+        with self.ledger.transaction():
+            self.ledger._check_incidents(allow_protected=True)
+            if self.ledger.db.execute("SELECT 1 FROM intents WHERE status NOT IN ('FILLED','CANCELLED','REJECTED','ABANDONED')").fetchone():
+                raise Refused('Finalize working entries before continuation')
+            source = self.ledger.db.execute('SELECT state,checked_at FROM live_source_health WHERE id=1').fetchone()
+            if not source or source[0] != 'connected' or not 0 <= (
+                    datetime.now(timezone.utc)-datetime.fromisoformat(source[1])).total_seconds() <= 30:
+                raise Refused('Fresh connected signal source required')
+            self.ledger.db.execute('UPDATE control SET paused=0 WHERE id=1')
 
     def allowed(self):
         try:

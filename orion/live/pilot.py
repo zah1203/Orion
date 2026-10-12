@@ -6,6 +6,8 @@ import time
 from .ledger import Refused, amount, positive_int
 
 MONEY = ('capital', 'max_order_premium', 'max_open_premium', 'daily_loss', 'fee_reserve', 'max_trade_loss', 'max_open_risk')
+PREFERENCES = ('capital', 'daily_loss', 'max_trade_loss', 'max_lots', 'max_entries')
+
 COUNTS = ('max_lots', 'max_entries', 'stop_gap_ticks', 'target_timeout_seconds')
 
 
@@ -40,6 +42,57 @@ class Pilot:
                 uid TEXT PRIMARY KEY REFERENCES users(id), version INTEGER NOT NULL,
                 limits TEXT NOT NULL, consent INTEGER NOT NULL DEFAULT 0,
                 enrolled INTEGER NOT NULL DEFAULT 1, ucc_hash TEXT NOT NULL)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS live_risk_preferences(
+                uid TEXT PRIMARY KEY REFERENCES users(id), limits TEXT NOT NULL, updated_at REAL NOT NULL)''')
+
+    def preferences(self, actor, uid, values=None):
+        """Planning values only; never enroll or change an execution policy."""
+        self.store.user(uid)
+        with self.store.lock(uid), self.store.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            owner = db.execute('SELECT role,access FROM users WHERE id=?', (actor,)).fetchone()
+            user = db.execute('SELECT access FROM users WHERE id=?', (uid,)).fetchone()
+            if not owner or tuple(owner) != ('owner', 'approved') or not user or user[0] != 'approved':
+                raise Refused('Approved owner and account required')
+            if values is not None:
+                if not isinstance(values, dict) or set(values) != set(PREFERENCES):
+                    raise Refused('Enter the five Live risk preferences')
+                result = {}
+                for key in PREFERENCES:
+                    value = values[key]
+                    if key in ('max_lots', 'max_entries'):
+                        positive_int(value)
+                        if value > 100:
+                            raise Refused('Count must be at most 100')
+                        result[key] = value
+                    else:
+                        number = amount(value)
+                        if isinstance(value, bool) or not 0 < number <= 100000000 or number.as_tuple().exponent < -2:
+                            raise Refused('Invalid monetary preference')
+                        result[key] = str(number)
+                if not amount(result['max_trade_loss']) <= amount(result['daily_loss']) <= amount(result['capital']):
+                    raise Refused('Per-trade risk must fit daily loss, and daily loss must fit capital')
+                db.execute('INSERT OR REPLACE INTO live_risk_preferences VALUES(?,?,?)',
+                           (uid, json.dumps(result, sort_keys=True), time.time()))
+                db.execute('INSERT INTO admin_audit(at,actor,subject,action) VALUES(?,?,?,?)',
+                           (time.time(), actor, uid, 'live_risk_preferences_saved'))
+            row = db.execute('SELECT limits FROM live_risk_preferences WHERE uid=?', (uid,)).fetchone()
+            policy = db.execute('SELECT limits FROM live_pilots WHERE uid=?', (uid,)).fetchone()
+            previous = json.loads(policy[0]) if policy else {}
+            execution = {key: previous[key] for key in ('fee_reserve', 'stop_gap_ticks',
+                         'target_timeout_seconds') if key in previous}
+            return dict(preferences=json.loads(row[0]) if row else None, execution=execution, applied=False,
+                        order_submission_available=False)
+
+    def configure_simple(self, actor, uid, values):
+        """Derive capital/risk caps; execution assumptions must remain explicit."""
+        execution = ('fee_reserve', 'stop_gap_ticks', 'target_timeout_seconds')
+        if not isinstance(values, dict) or set(values) != set(PREFERENCES + execution):
+            raise Refused('Five risk values and reviewed fee and exit settings required')
+        limits = dict(values, max_order_premium=values['capital'],
+                      max_open_premium=values['capital'], max_open_risk=values['daily_loss'])
+        # configure performs validation, authorization and version invalidation atomically.
+        return self.configure(actor, uid, limits)
 
     def configure(self, actor, uid, limits):
         limits = validate_limits(limits)
