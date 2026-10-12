@@ -100,3 +100,24 @@ it must run on Linux CI and the installed EC2 service must still be validated.
 No actual Kotak login, order, EC2 worker startup, systemd deployment or AWS Live
 restore was performed locally. The production order gate remains closed pending
 the acceptance items in `live-consolidated-acceptance.md`.
+
+## Reusing a staged release
+
+The installer can reuse an inactive release directory only when every packaged
+file matches the newly downloaded, checksum-verified archive. Missing, changed,
+linked or unexpected source files and incomplete virtual environments are refused.
+It does not overwrite the staged tree or reinstall its dependencies. It reruns
+the on-host tests before any activation step. Already-active worker or portal
+releases are refused rather than silently restarted.
+
+Archive timestamps may differ between builds; file contents must match. If a
+rebuilt web bundle differs, stop and review the mismatch; do not delete or rename
+the old release to force activation. Deploy a reviewed new commit instead.
+The initial pre-fix staged release can remain on disk unchanged. A full deployment
+of the new main commit performs its own installation and tests before switching
+services, so another staging run is optional.
+
+Staging success is evidence of installation and on-host tests only. Full deployment
+still requires a maintenance window and a current verified private backup. It
+restarts Paper services, preserves application databases, and does not itself
+authorize real-money entries. The Live-slot deployment guard remains in force.
