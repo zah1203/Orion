@@ -10,7 +10,7 @@ from .ledger import Refused
 from .reconciliation import fingerprint
 from .routing import reviewed_policy
 
-CONFIRMATION = "AUTHORIZE ONE LIVE ENTRY TODAY WITH MY REVIEWED LIMITS"
+CONFIRMATION = "AUTHORIZE AUTOMATIC LIVE ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS"
 
 
 def install(db):
@@ -22,6 +22,10 @@ def install(db):
         CREATE TABLE IF NOT EXISTS entry_dispatch_permission(
             tag TEXT PRIMARY KEY, nonce TEXT NOT NULL, committed_at TEXT NOT NULL);
     ''')
+    # Existing one-entry permission must never silently become a session grant.
+    columns = {r[1] for r in db.execute('PRAGMA table_info(entry_permission)')}
+    if 'scope' not in columns:
+        db.execute("ALTER TABLE entry_permission ADD COLUMN scope TEXT NOT NULL DEFAULT 'one-entry'")
 
 
 def revoke(ledger):
@@ -68,7 +72,7 @@ def review(ledger, store, uid, *, policy_version, confirmation):
         if accounting.estimate_budget(now=now, marks={}, fee_reserve=policy['limits']['fee_reserve'])['open_quantities']:
             raise Refused('Authorization requires a flat account')
         cash.balance(policy=policy, now=now)
-        ledger.db.execute('INSERT OR REPLACE INTO entry_permission VALUES(1,?,?,?,?,1,?)',
+        ledger.db.execute("INSERT OR REPLACE INTO entry_permission(id,nonce,worker_session,day,policy_digest,active,reviewed_at,scope) VALUES(1,?,?,?,?,1,?,'session')",
             (uuid.uuid4().hex,checked['session'],now.astimezone(IST).date().isoformat(),digest(policy),now.isoformat()))
         ledger.db.execute('UPDATE control SET paused=0 WHERE id=1')
         return dict(authorized=True, day=now.astimezone(IST).date().isoformat())
@@ -88,7 +92,7 @@ class EntryAuthority:
         self.account, self.ledger = account, account.ledger
         install(self.ledger.db)
 
-    def require(self, *, consumed=False):
+    def require(self, *, allow_paused=False):
         """Called while the account lock is held; permission is not a risk check."""
         a, ledger = self.account, self.ledger
         if (status.release_status()['order_submission_available'] is not True or
@@ -97,10 +101,10 @@ class EntryAuthority:
         row = ledger.db.execute('SELECT * FROM entry_permission WHERE id=1').fetchone()
         policy = reviewed_policy(a.store, a.uid, a.session.ucc)
         now = datetime.now(timezone.utc)
-        if (not row or row['active'] != (2 if consumed else 1) or row['worker_session'] != ledger.session or
+        if (not row or row['active'] != 1 or row['scope'] != 'session' or row['worker_session'] != ledger.session or
                 row['day'] != now.astimezone(IST).date().isoformat() or
                 row['policy_digest'] != digest(policy) or datetime.fromisoformat(row['reviewed_at']) > now or
-                ledger.db.execute('SELECT paused FROM control WHERE id=1').fetchone()[0]):
+                (not allow_paused and ledger.db.execute('SELECT paused FROM control WHERE id=1').fetchone()[0])):
             raise Refused('Current account-owned daily entry permission required')
         with a.store.db() as db:
             slot = db.execute('SELECT reserved,stop_requested FROM live_worker_slots WHERE uid=?',(a.uid,)).fetchone()
@@ -108,20 +112,52 @@ class EntryAuthority:
             raise Refused('Monitoring stop or handover blocks entries')
         return row
 
+    def resume_when_flat(self):
+        """Continue the same grant after a reconciled exit, never after revocation.
+
+        Exit management temporarily pauses admission. Resumption is possible only
+        at a fresh flat boundary, with no unknown commands or manual requests.
+        Caller holds the account lock.
+        """
+        self.require(allow_paused=True)
+        ledger = self.ledger
+        with ledger.transaction():
+            ledger._check_incidents()
+            for table in ('intents', 'protective_exits'):
+                if ledger.db.execute(f"SELECT 1 FROM {table} WHERE status NOT IN ('FILLED','CANCELLED','REJECTED','ABANDONED')").fetchone():
+                    raise Refused('Settled flat book required for session continuation')
+            if ledger.db.execute("SELECT 1 FROM broker_commands WHERE status!='CONFIRMED'").fetchone():
+                raise Refused('Confirmed commands required for session continuation')
+            if ledger.db.execute("SELECT 1 FROM manual_requests WHERE state='PENDING'").fetchone():
+                raise Refused('Manual action blocks session continuation')
+            source = ledger.db.execute('SELECT state,checked_at FROM live_source_health WHERE id=1').fetchone()
+            if not source or source[0] != 'connected' or not 0 <= (
+                    datetime.now(timezone.utc)-datetime.fromisoformat(source[1])).total_seconds() <= 30:
+                raise Refused('Fresh connected signal source required')
+            ledger.db.execute('UPDATE control SET paused=0 WHERE id=1')
+
     def allowed(self):
         try:
-            row = self.ledger.db.execute('SELECT active FROM entry_permission WHERE id=1').fetchone()
-            consumed = bool(row and row[0] == 2)
-            permission = self.require(consumed=consumed)
-            if consumed:
-                attempt = self.ledger.db.execute('''SELECT a.at FROM execution_attempts a
-                    JOIN entry_dispatch_permission p ON p.tag=a.tag WHERE p.nonce=?''',(permission['nonce'],)).fetchone()
-                if not attempt or not 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(attempt[0])).total_seconds() <= 30:
-                    raise Refused('Working entry permission expired')
-            return True
+            permission = self.require(allow_paused=True)
         except (ValueError, TypeError):
-            self.ledger.pause()
+            # Invalid dates, policy changes and restart do not
+            # silently regain automatic entry authority later.
+            revoke(self.ledger)
             return False
+        if self.ledger.db.execute('SELECT paused FROM control WHERE id=1').fetchone()[0]:
+            return False
+        rows = self.ledger.db.execute("""SELECT i.tag,a.at,p.nonce FROM intents i
+            LEFT JOIN execution_attempts a ON a.tag=i.tag
+            LEFT JOIN entry_dispatch_permission p ON p.tag=i.tag
+            WHERE i.status IN ('DISPATCHING','OPEN','PARTIAL','UNKNOWN')""").fetchall()
+        for row in rows:
+            if (row['nonce'] != permission['nonce'] or not row['at'] or
+                    not 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(row['at'])).total_seconds() <= 30):
+                # Cancel expired working entries; a confirmed flat outcome may
+                # continue the same day/session grant without repeating approval.
+                self.ledger.pause()
+                return False
+        return True
 
     def bind(self, tag):
         if not self.ledger.db.in_transaction:
@@ -129,11 +165,10 @@ class EntryAuthority:
         row = self.require()
         self.ledger.db.execute('INSERT INTO entry_dispatch_permission VALUES(?,?,?)',
             (tag,row['nonce'],datetime.now(timezone.utc).isoformat()))
-        self.ledger.db.execute('UPDATE entry_permission SET active=2 WHERE id=1')
 
     def transport(self, request):
         """Final capability check immediately before the one-shot broker call."""
-        row = self.require(consumed=True)
+        row = self.require()
         bound = self.ledger.db.execute('SELECT * FROM entry_dispatch_permission WHERE tag=?', (request.get('tag'),)).fetchone()
         if (not bound or bound['nonce'] != row['nonce'] or
                 not 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(bound['committed_at'])).total_seconds() <= 5):

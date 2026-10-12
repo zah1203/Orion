@@ -29,8 +29,8 @@ export default function LiveEntries({ uid, version }: { uid: string; version: nu
     setBusy(true); setConfirm(false); setNotice("");
     try {
       await api("/live/entries/authorize", { policy_version: version,
-        confirmation: "AUTHORIZE ONE LIVE ENTRY TODAY WITH MY REVIEWED LIMITS" });
-      setNotice("One next entry authorized under your reviewed limits. This permission ends at India midnight, on pause, or when the worker restarts.");
+        confirmation: "AUTHORIZE AUTOMATIC LIVE ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS" });
+      setNotice("Automatic entries authorized for this India trading day under your reviewed limits. No confirmation is needed for each signal. Permission ends at India midnight, on pause, worker restart or a blocking failure.");
       setState(await api("/live/entries"));
     } catch (e) { setNotice(e instanceof Error ? e.message : "Authorization failed."); }
     finally { setBusy(false); }
@@ -39,14 +39,15 @@ export default function LiveEntries({ uid, version }: { uid: string; version: nu
     <Text style={s.title}>Live entry checks</Text>
     <Text style={s.text}>While flat, your worker can check new signals against broker quotes, cash limits and margin without placing an order. A passed check is not permission to trade or proof of spendable cash.</Text>
     {!state?.release_available && <Text style={s.text}>Real-money entry authorization is locked pending release acceptance.</Text>}
+    <Text style={s.text}>Current scope: sequential positions only; sale proceeds are not reused the same day. This does not yet reproduce Paper trading frequency. Session authorization requires a running, reconciled worker and ends at India midnight.</Text>
     {state?.day && <Text style={s.text}>Last permission: {state.permission} · India date {state.day}</Text>}
     {notice ? <Text accessibilityRole="alert" style={s.text}>{notice}</Text> : null}
     {state?.release_available && version ? <>
       {!confirm ? <Pressable accessibilityRole="button" disabled={busy} style={s.button} onPress={() => setConfirm(true)}>
-        <Text style={s.label}>Review one real-money entry</Text></Pressable> : <>
-        <Text style={s.text}>Authorize your next eligible signal to place one real order using your current reviewed limits and cash allocation. It may lose money. Rejected or uncertain attempts are not automatically retried. Review the result before authorizing another entry.</Text>
+        <Text style={s.label}>Review automatic trading session</Text></Pressable> : <>
+        <Text style={s.text}>Authorize automatic real orders from eligible signals for the rest of this India trading day, using your reviewed limits and cash allocation. You may be asleep when orders are placed and money can be lost. Each order is checked independently. Unknown outcomes stop new entries and are never automatically retried.</Text>
         <Pressable accessibilityRole="button" disabled={busy} style={s.button} onPress={authorize}>
-          <Text style={s.label}>Authorize one next Live entry</Text></Pressable>
+          <Text style={s.label}>Authorize this Live trading session</Text></Pressable>
         <Pressable accessibilityRole="button" onPress={() => setConfirm(false)}><Text style={s.text}>Cancel review</Text></Pressable>
       </>}
     </> : null}

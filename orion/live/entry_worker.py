@@ -30,14 +30,21 @@ class EntryWorker:
         now = datetime.now(timezone.utc)
         with a.store.lock(a.uid):
             health = a.monitor.health()
+            if health['state'] == 'review-required':
+                revoke(a.ledger)
             if health['state'] != 'observed' or health['exposure'] != 0:
                 return 'monitoring-first'
             try:
                 a.ledger._check_incidents()
             except Refused:
+                revoke(a.ledger)
                 return 'review-required'
             if self.db.execute("SELECT 1 FROM intents WHERE status NOT IN ('FILLED','CANCELLED','REJECTED','ABANDONED')").fetchone():
                 return 'monitoring-first'
+            try:
+                c.authority.resume_when_flat()
+            except Refused:
+                pass
             source = self.db.execute('''SELECT s.source,s.signal_time FROM live_signals s
                 WHERE s.state='PENDING' AND NOT EXISTS(SELECT 1 FROM live_entry_checks e WHERE e.source=s.source)
                 ORDER BY s.signal_time DESC LIMIT 1''').fetchone()
@@ -53,7 +60,7 @@ class EntryWorker:
             except Refused:
                 pass
             # Returning from a completed exit plan must restore partial-fill
-            # protection for the next separately authorized entry.
+            # protection for the next session-authorized entry.
             if a.strategy:
                 a.monitor = ProtectionMonitor(a.ledger,a.session,collect_trades=True)
                 a.strategy = False
@@ -93,9 +100,10 @@ def snapshot(store, uid):
                 raise Refused('Entry status account mismatch')
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if 'entry_permission' in tables:
-                row = db.execute('SELECT active,day FROM entry_permission WHERE id=1').fetchone()
+                has_scope = 'scope' in {r[1] for r in db.execute('PRAGMA table_info(entry_permission)')}
+                row = db.execute("SELECT active,day," + ("scope" if has_scope else "'one-entry' AS scope") + " FROM entry_permission WHERE id=1").fetchone()
                 if row:
-                    result.update(permission={0:'revoked',1:'reviewed',2:'used'}.get(row['active'],'not-authorized'),day=row['day'])
+                    result.update(permission=('session-reviewed' if row['active'] == 1 and row['scope'] == 'session' else 'not-authorized'),day=row['day'])
             if 'live_entry_checks' in tables:
                 result['checks'] = [dict(r) for r in db.execute('''SELECT checked_at,purpose,state,stage,proposal
                     FROM live_entry_checks ORDER BY checked_at DESC LIMIT 10''')]

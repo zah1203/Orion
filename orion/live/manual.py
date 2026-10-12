@@ -67,7 +67,8 @@ def request(monitor, *, request_id, entry_tag, action, limit_price=None, now=Non
                 lot_size=terms['lot_size'], tick=terms['tick'], kind='EXIT', price=price).parameters()
         db.execute('INSERT INTO manual_requests VALUES(?,?,?,?,?,?,?,NULL)',
             (request_id, entry_tag, action, price, quantity, (now+timedelta(seconds=60)).isoformat(), 'PENDING'))
-        ledger.pause()
+        from .authorization import revoke
+        revoke(ledger)
         return dict(db.execute('SELECT * FROM manual_requests WHERE request_id=?', (request_id,)).fetchone())
 
 
