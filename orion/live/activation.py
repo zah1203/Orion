@@ -68,6 +68,17 @@ def preflight(store, uid, version):
 
 
 class ActivationMonitor(ReviewedAccountMonitor):
+    def _authenticate(self):
+        from .authorization import EntryAuthority
+        from .startup import EntryCheckedSession
+        protected = super()._authenticate()
+        try:
+            self.entry_authority = EntryAuthority(self)
+            return EntryCheckedSession(protected._session, self.entry_authority.transport)
+        except BaseException:
+            protected.close()
+            raise
+
     def _open_ledger(self, path):
         with self.store.lock(self.uid):
             ucc = preflight(self.store, self.uid, self._policy_version)
@@ -270,10 +281,21 @@ async def run_child(store, payload, master, ready):
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     monitor = ActivationMonitor(store, payload['uid'], payload['policy_version'], payload.pop('totp'))
+    from .entry_worker import EntryWorker
+    entries = None
+    def started(account):
+        nonlocal entries
+        entries = EntryWorker(account)
+        ready()
+    def after_cycle(account):
+        if release_if_flat(account):
+            return True
+        entries.cycle()
+        return release_if_flat(account)
     try:
         await serve_account(store, monitor.uid, lambda: json.loads(Path(master).read_text()), None,
             stop=stop, collect_trades=True, _monitor_factory=lambda *a, **k: monitor,
-            _on_started=lambda account: ready(), _after_cycle=release_if_flat)
+            _on_started=started, _after_cycle=after_cycle)
     finally:
         monitor._totp = None
         for sig in (signal.SIGINT, signal.SIGTERM):

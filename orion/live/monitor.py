@@ -153,6 +153,7 @@ class AccountMonitor:
         self.store, self.uid, self.session_factory = store, uid, session_factory
         self.session = None
         self.lease = self.ledger = None
+        self.entry_authority = None
 
     def __enter__(self):
         self.store.user(self.uid)
@@ -203,7 +204,12 @@ class AccountMonitor:
                 self.ledger.pause()
                 result = self.monitor.cycle(marks={})
                 return self.monitor._health('review-required', 'broker-quote-failed:' + result['action'])
-            return self.monitor.cycle(marks=marks)
+            if self.strategy:
+                return self.monitor.cycle(marks=marks)
+            return self.monitor.cycle(marks=marks, entries_allowed=self._entries_allowed())
+
+    def _entries_allowed(self):
+        return bool(self.entry_authority is not None and self.entry_authority.allowed())
 
     @property
     def needs_quotes(self):
@@ -221,12 +227,12 @@ class AccountMonitor:
     def cycle(self, *, marks=None):
         if self.ledger is None:
             raise Refused('Account worker lease required')
-        # There is no production entry authorization in this release. Monitoring
-        # always closes outstanding entry orders and retains protective management.
+        # Missing or expired one-shot permission closes outstanding entry orders;
+        # confirmed exposure retains protective management.
         with self.store.lock(self.uid):
             if self.strategy:
                 return self.monitor.cycle(marks={} if marks is None else marks)
-            result = self.monitor.cycle(entries_allowed=False)
+            result = self.monitor.cycle(entries_allowed=self._entries_allowed())
             if result['state'] != 'review-required':
                 from .entry_plans import handoff
                 try:

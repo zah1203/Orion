@@ -22,10 +22,10 @@ def atomic_write(path, data):
 def worker_state(run):
     result = run(['systemctl', 'list-units', '--all', '--type=service', '--plain',
                   '--no-legend', '--no-pager', 'orion-worker@*.service',
-                  'orion-supervisor.service', 'orion-attention.service', 'orion.service'],
+                  'orion-supervisor.service', 'orion-attention.service', 'orion-live-notifications.service', 'orion.service'],
                  capture_output=True, text=True, check=True)
     units = sorted({line.split()[0] for line in result.stdout.splitlines() if line.split()})
-    if any(not re.fullmatch(r'orion(?:-worker@[a-zA-Z0-9_.\\-]+|-supervisor|-attention)?\.service', u) for u in units):
+    if any(not re.fullmatch(r'orion(?:-worker@[a-zA-Z0-9_.\\-]+|-supervisor|-attention|-live-notifications)?\.service', u) for u in units):
         raise RuntimeError('Unexpected worker unit inventory')
     return {u: run(['systemctl', 'show', u, '--property=MainPID,InvocationID,ActiveState',
                     '--no-pager'], capture_output=True, text=True, check=True).stdout for u in units}

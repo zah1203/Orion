@@ -1,10 +1,10 @@
 # Consolidated Live acceptance record
 
-This working batch is based on merged release `e5fd6997b11762e2d023c316a13d08ec2b20bfce`.
-Implementation and local validation have not enabled Live, submitted real orders,
-started services, authenticated to Kotak, changed Paper settings, or established
-AWS recovery acceptance. Keep the batch on
-one branch until the remaining integration is ready for a single review.
+PR #33 is merged at `f4ad10059e6b811ec2e26e1cfd3f9930522d687b`.
+The follow-up integrates [one-entry authorization and worker checks](live-entry-activation.md).
+Local implementation and synthetic validation have not submitted real orders,
+started production services, authenticated to Kotak, changed Paper settings, or
+established AWS Live recovery acceptance.
 
 ## Confirmed pilot scope
 
@@ -81,7 +81,7 @@ Live trade controls**. Check the instrument and open quantity before confirming.
    broker orders while Orion has unresolved commands.
 
 Monitoring activation is described in [live-worker-activation.md](live-worker-activation.md).
-No entry-resume control is added. A new signal cannot reuse a
+The separate one-entry authorization control remains locked by release acceptance. A new signal cannot reuse a
 previous signal's durable entry identity after a manual exit.
 
 ## Remaining acceptance work
@@ -89,7 +89,7 @@ previous signal's durable entry identity after a manual exit.
 | Requirement | Evidence still required |
 | --- | --- |
 | Cash-only funding and fees | Compare fresh account data with broker funds records; validate the implemented cash allocation and fee model against settlement and unexpected changes. |
-| Production BUY coordinator | Coordinator and bounded market adapter implemented and locally tested; actual broker evidence and account-specific real-money entry authorization remain required. |
+| Production BUY coordinator | Coordinator and bounded market adapter implemented and locally tested; one-entry authorization and activated-worker integration are implemented; actual broker evidence and release acceptance remain required. |
 | Worker deployment and handover | Own-account monitoring launcher and authentication lifecycle implemented; scheduled deployment, installed-service verification and actual account handover remain required. Existing Paper workers are preserved until explicitly scheduled. |
 | AWS recovery | Restore an actual Live ledger backup into isolation and verify its account, fills and keys without production writes. Existing Paper backup success does not establish this. |
 | Broker acceptance | Validate contract mapping/static egress and both accounts' read-only evidence; obtain specific approval for a supervised real order and verify fills, cancellation and protection. |

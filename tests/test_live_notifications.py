@@ -93,3 +93,26 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(paper.read_bytes(),b'unchanged-paper')
         self.assertFalse((self.store.account_dir(self.other)/'live.db').exists())
         self.assertEqual(self.ledger.db.execute('SELECT COUNT(*) FROM intents').fetchone()[0],0)
+
+    def test_claim_does_not_hold_accounts_writer_and_rechecks_recipient(self):
+        self.register()
+        original = self.sender.journal.claim
+        def claim():
+            with self.store.db() as db:
+                db.execute('PRAGMA busy_timeout=1')
+                db.execute('BEGIN IMMEDIATE')
+            event = original()
+            self.register(self.other)
+            return event
+        self.sender.journal.claim = claim
+        self.assertEqual(self.sender.cycle(), 'delivery-unknown')
+        self.post.assert_not_called()
+        self.assertEqual(self.ledger.db.execute('SELECT status FROM live_alerts').fetchone()[0], 'UNKNOWN')
+
+    def test_reserved_dead_worker_alert_is_deduplicated(self):
+        with self.store.db() as db:
+            db.execute('INSERT INTO live_worker_slots VALUES(?,1,1,0)', (self.uid,))
+        for _ in range(2):
+            self.assertEqual(dispatch_accounts(self.store, _post=self.post)['failed'], 0)
+        self.assertEqual(self.ledger.db.execute("SELECT COUNT(*) FROM live_alerts WHERE code='monitor-review-required'").fetchone()[0], 1)
+        self.post.assert_not_called()

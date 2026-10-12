@@ -96,6 +96,11 @@ class LiveWorkerStop(Strict):
     confirmation: Literal["STOP ONLY AFTER VERIFIED FLAT"]
 
 
+class LiveEntryReview(Strict):
+    policy_version: int = Field(strict=True, gt=0)
+    confirmation: Literal["AUTHORIZE ONE LIVE ENTRY TODAY WITH MY REVIEWED LIMITS"]
+
+
 class LiveManual(Strict):
     request_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     entry_tag: str = Field(pattern=r"^orion[a-f0-9]{24}$")
@@ -506,6 +511,24 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
             return snapshot(store, identity(request)["user_id"])
         except ValueError:
             raise HTTPException(409, "Live worker state requires review") from None
+
+    @app.get("/api/live/entries")
+    def live_entries_status(request: Request):
+        from ..live.entry_worker import snapshot
+        try:
+            return snapshot(store,identity(request)["user_id"])
+        except ValueError:
+            raise HTTPException(409,"Entry status requires review") from None
+
+    @app.post("/api/live/entries/authorize")
+    def live_entries_authorize(body: LiveEntryReview, request: Request):
+        from ..live.authorization import authorize
+        uid = identity(request, True)["user_id"]
+        connections.limit(uid,"live-entry-review",5)
+        try:
+            return authorize(store,uid,**body.model_dump())
+        except (ValueError, sqlite3.Error, TypeError, KeyError):
+            raise HTTPException(409,"Live release acceptance, current limits, cash review and fresh flat worker books are required") from None
 
     @app.post("/api/live/worker/start")
     async def live_worker_start(body: LiveWorkerStart, request: Request):

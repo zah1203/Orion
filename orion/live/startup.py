@@ -36,6 +36,21 @@ class ProtectiveSession:
         return getattr(self._session, 'closed', False) is True
 
 
+class EntryCheckedSession(ProtectiveSession):
+    """Activation worker only: ENTRY requires its committed one-shot permission."""
+    def __init__(self, session, authorize):
+        super().__init__(session)
+        self._authorize = authorize
+
+    def request(self, operation, **kwargs):
+        if operation == 'place' and isinstance(kwargs.get('request'), dict) and kwargs['request'].get('kind') == 'ENTRY':
+            if self._session.ucc != self.ucc:
+                raise Refused('Entry session identity changed')
+            self._authorize(kwargs['request'])
+            return self._session.request(operation, **kwargs)
+        return super().request(operation, **kwargs)
+
+
 class ReviewedAccountMonitor(AccountMonitor):
     """Authenticate once, only after the shared worker lease and ledger checks.
 
