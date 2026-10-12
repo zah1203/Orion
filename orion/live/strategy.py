@@ -111,6 +111,10 @@ class ExitStrategy(ProtectionMonitor):
             now = datetime.now(timezone.utc)
             self.ledger.pause()
             check_conflicts(self.db)
+            from .manual import process
+            manual = process(self, marks=marks)
+            if manual is not None:
+                return manual
             # Unknown commands cannot authorize replacement capacity after restart.
             if self.db.execute("SELECT 1 FROM broker_commands WHERE status IN ('SENDING','UNKNOWN')").fetchone():
                 return self._health('review-required', 'unknown-command')

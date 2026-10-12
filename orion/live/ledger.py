@@ -80,6 +80,7 @@ class Ledger:
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS metadata(account TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS live_incidents(code TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS abandoned_intents(tag TEXT PRIMARY KEY, abandoned_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS intents(
                 tag TEXT PRIMARY KEY, event TEXT UNIQUE NOT NULL, body TEXT NOT NULL,
@@ -208,7 +209,7 @@ class Ledger:
             sold = self.db.execute('SELECT COALESCE(SUM(filled),0) FROM protective_exits WHERE entry_tag=?', (row['tag'],)).fetchone()[0]
         if sold > row['filled']:
             raise Refused('Confirmed exits exceed confirmed entries')
-        remaining = (row['filled'] if row['status'] in ('FILLED','CANCELLED','REJECTED') else body['quantity']) - sold
+        remaining = (row['filled'] if row['status'] in ('FILLED','CANCELLED','REJECTED','ABANDONED') else body['quantity']) - sold
         if remaining < 0:
             raise Refused('Invalid reserved exposure')
         return remaining
@@ -234,6 +235,21 @@ class Ledger:
             changed = self.db.execute("UPDATE intents SET status='DISPATCHING' WHERE tag=? AND status='PREPARED'", (tag,))
             if changed.rowcount != 1:
                 raise Refused("Intent cannot be dispatched twice")
+        return self.get(tag)
+
+    def abandon_prepared(self, tag):
+        """Release an unsent reservation without deleting its deduplication record."""
+        from datetime import datetime, timezone
+        with self.transaction():
+            row = self.get(tag)
+            if row['status'] != 'PREPARED' or row['broker_id'] or row['filled']:
+                raise Refused('Unsent prepared intent required')
+            for table in ('execution_attempts', 'broker_commands'):
+                if self.db.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone():
+                    if self.db.execute(f'SELECT 1 FROM {table} WHERE tag=?', (tag,)).fetchone():
+                        raise Refused('Attempted intent cannot be abandoned')
+            self.db.execute('INSERT INTO abandoned_intents VALUES(?,?)', (tag, datetime.now(timezone.utc).isoformat()))
+            self.db.execute("UPDATE intents SET status='ABANDONED' WHERE tag=?", (tag,))
         return self.get(tag)
 
     def mark_unknown(self, tag):
@@ -265,7 +281,7 @@ class Ledger:
         with self.transaction():
             row = self.get(tag)
             body = json.loads(row['body'])
-            if (row['status'] == 'PREPARED' or body['symbol'] != symbol or
+            if (row['status'] in ('PREPARED','ABANDONED') or body['symbol'] != symbol or
                     body['quantity'] != quantity or filled < row['filled'] or
                     (filled and avg > amount(body['limit_price'])) or
                     (row['broker_id'] and row['broker_id'] != broker_id)):

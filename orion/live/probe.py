@@ -32,7 +32,7 @@ async def run_probe(creds, totp):
                 code = report.get('error') if isinstance(report, dict) else None
                 raise ProbeFailure(code if code in CODES else 'probe-failed')
             expected = {'order_count','working_order_count','position_count','nonzero_position_count',
-                        'rms_net','identity_matched','live_available','order_submission_available','checked_at'}
+                        'rms_net','reported_funds','identity_matched','live_available','order_submission_available','checked_at'}
             if not isinstance(report, dict) or set(report) != expected:
                 raise ProbeFailure('probe-failed')
             for k in ('order_count','working_order_count','position_count','nonzero_position_count'):
@@ -42,6 +42,18 @@ async def run_probe(creds, totp):
                     report['order_submission_available'] is not False):
                 raise ProbeFailure('probe-failed')
             report['rms_net'] = str(number(report['rms_net']))
+            from .funding import FIELDS, SIGNED
+            funds = report['reported_funds']
+            if not isinstance(funds, dict) or set(funds) != set(FIELDS):
+                raise ProbeFailure('probe-failed')
+            for key, value in funds.items():
+                if value is not None:
+                    numeric = number(value)
+                    if numeric.as_tuple().exponent < -18 or (key not in SIGNED and numeric < 0):
+                        raise ProbeFailure('probe-failed')
+                    funds[key] = str(numeric)
+            if funds['Net'] != report['rms_net']:
+                raise ProbeFailure('probe-failed')
             from datetime import datetime, timezone
             stamp = datetime.fromisoformat(report['checked_at'])
             if stamp.tzinfo is None or not 0 <= (datetime.now(timezone.utc) - stamp).total_seconds() <= 65:

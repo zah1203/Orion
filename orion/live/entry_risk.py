@@ -13,11 +13,13 @@ from .pilot import validate_limits
 from .reconciliation import require_current
 
 
-def assess(ledger, accounting, limits, candidate, *, now, marks):
+def assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, policy=None):
     if not ledger.db.in_transaction:
         raise Refused('Transactional risk snapshot required')
     if accounting.ledger is not ledger or candidate['account'] != ledger.account:
         raise Refused('Risk account mismatch')
+    if cash is not None and (cash.ledger is not ledger or cash.accounting is not accounting):
+        raise Refused('Cash risk account mismatch')
     binding = ledger.db.execute('SELECT ucc FROM reconciliation_account').fetchone()
     if not binding or accounting.ucc != binding[0]:
         raise Refused('Risk broker account mismatch')
@@ -33,7 +35,9 @@ def assess(ledger, accounting, limits, candidate, *, now, marks):
     for _, marked_at in marks.values():
         if not 0 <= (now-timestamp(marked_at)).total_seconds() <= 5:
             raise Refused('Fresh risk marks required')
-    summary = accounting.summary(now=now, marks=marks)
+    cash_snapshot = cash.balance(policy=policy, now=now) if cash is not None else None
+    summary = (accounting.estimate_budget(now=now, marks=marks, fee_reserve=limits['fee_reserve'])
+               if cash is not None else accounting.summary(now=now, marks=marks))
     day = now.astimezone(IST).date().isoformat()
     counted = {r['tag'] for r in ledger.db.execute(
         'SELECT tag FROM execution_attempts WHERE day=?', (day,))}
@@ -66,10 +70,15 @@ def assess(ledger, accounting, limits, candidate, *, now, marks):
     lot = positive_int(candidate['lot_size'])
     maximum = min(positive_int(candidate['lots']), limits['max_lots'])
     fee, loss = amount(limits['fee_reserve']), amount(summary['loss_used'])
+    if cash_snapshot is not None:
+        # Include retained allowances for attempted/cancelled orders without a
+        # fill. A trade journal alone cannot account for these possible charges.
+        loss += max(amount(0), amount(cash_snapshot['fee_hold'])-amount(summary['fees']))
     for lots in range(maximum, 0, -1):
         debit = price*lot*lots + fee
         projected_risk = (price-stop)*lot*lots + fee
-        if (debit <= amount(limits['max_order_premium']) and
+        if ((cash_snapshot is None or debit <= amount(cash_snapshot['remaining'])) and
+                debit <= amount(limits['max_order_premium']) and
                 premium+debit <= min(amount(limits['capital']), amount(limits['max_open_premium'])) and
                 projected_risk <= amount(limits['max_trade_loss']) and
                 risk+projected_risk <= amount(limits['max_open_risk']) and
@@ -79,6 +88,6 @@ def assess(ledger, accounting, limits, candidate, *, now, marks):
                 candidate_stop_risk=str(projected_risk), loss_used=str(loss),
                 counted_entries=len(counted), entries_paused=bool(ledger.db.execute(
                     'SELECT paused FROM control WHERE id=1').fetchone()[0]),
-                available_cash_verified=False, fees_verified=False,
+                cash_allocation=cash_snapshot, available_cash_verified=False, fees_verified=False,
                 order_submission_available=False)
     raise Refused('No whole lot fits remaining ledger risk budget')

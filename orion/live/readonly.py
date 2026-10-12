@@ -95,9 +95,20 @@ def summarize(orders, positions, limits, expected):
     entity = limits.get('EntityId')
     if entity not in (None, ''):
         account_match(entity, expected)
+    # Optional diagnostic fields only. Missing is unknown, never zero or cash.
+    from .funding import FIELDS, SIGNED
+    funds = {}
+    for key in FIELDS:
+        if key not in limits:
+            funds[key] = None
+            continue
+        value = number(limits[key])
+        if value.as_tuple().exponent < -18 or (key not in SIGNED and value < 0):
+            raise ProbeFailure('numeric')
+        funds[key] = str(value)
     return dict(order_count=len(orders), working_order_count=working,
                 position_count=len(positions), nonzero_position_count=nonzero,
-                rms_net=str(net), identity_matched=True,
+                rms_net=str(net), reported_funds=funds, identity_matched=True,
                 live_available=False, order_submission_available=False)
 
 

@@ -170,6 +170,15 @@ def inventory(portal, runtime, config):
     return files
 
 
+LIVE_COUNT_FIELDS = {"reviewed_live_pilots", "reviewed_live_owners", "reviewed_pilot_live_databases", "complete_pilot_live_schemas", "live_cash_reviews", "live_statement_reviews"}
+
+
+def counts_match(actual, saved):
+    # Old archives predate these additive diagnostics. All original counts still
+    # match exactly; authenticated manifest file hashes protect the full ledgers.
+    return {k:v for k,v in actual.items() if k in saved or k not in LIVE_COUNT_FIELDS} == saved
+
+
 def inspect_state(root, portal_key):
     """Validate credentials offline, without printing values or constructing a Store."""
     cipher = Fernet(portal_key)
@@ -178,6 +187,13 @@ def inspect_state(root, portal_key):
     counts = {"accounts": 0, "credential_records": 0, "broker_sessions": 0, "push_tokens": 0,
               "paper_databases": 0, "positions": 0, "open_positions": 0}
     with closing(connect_ro(root / "portal/accounts.db")) as db:
+        pilots, pilot_hashes, credential_ucc, pilot_owners = set(), {}, {}, 0
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='live_pilots'").fetchone():
+            pilots = {row[0] for row in db.execute('''SELECT p.uid FROM live_pilots p
+                JOIN users u ON u.id=p.uid WHERE p.enrolled=1 AND p.consent=p.version
+                AND u.access='approved' ''')}
+            pilot_hashes = {row[0]:row[1] for row in db.execute('SELECT uid,ucc_hash FROM live_pilots') if row[0] in pilots}
+            pilot_owners = sum(row[0] in pilots for row in db.execute("SELECT id FROM users WHERE role='owner'"))
         users = {row[0] for row in db.execute("SELECT id FROM users")}
         if any(not UID.fullmatch(uid) for uid in users):
             raise ValueError("Invalid account identity")
@@ -188,6 +204,8 @@ def inspect_state(root, portal_key):
                 if uid not in users or item["user_id"] != uid or not isinstance(item["values"], dict):
                     raise ValueError("Credential ownership/structure mismatch")
                 counts[label] += 1
+                if table == 'secrets':
+                    credential_ucc[uid] = item['values'].get('kotak_ucc')
         for uid, ciphertext in db.execute("SELECT user_id,ciphertext FROM push_devices"):
             if uid not in users:
                 raise ValueError("Push token ownership mismatch")
@@ -208,6 +226,8 @@ def inspect_state(root, portal_key):
             counts["positions"] += len(state["positions"])
             counts["open_positions"] += sum(p["status"] == "OPEN" for p in state["positions"].values())
     live_paths = list((root / "portal/accounts").glob("*/live.db"))
+    counts.update(reviewed_live_pilots=len(pilots), reviewed_live_owners=pilot_owners, reviewed_pilot_live_databases=0,
+                  complete_pilot_live_schemas=0, live_cash_reviews=0, live_statement_reviews=0)
     if live_paths:
         counts.update(live_databases=0, live_orders=0, live_fills=0)
         for path in live_paths:
@@ -219,6 +239,20 @@ def inspect_state(root, portal_key):
                 if db.execute("SELECT id FROM control").fetchall() != [(1,)]:
                     raise ValueError("Invalid account identity")
                 counts["live_databases"] += 1
+                names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                required = {'intents','protective_exits','broker_commands','fill_history','fee_corrections',
+                            'execution_terms','execution_attempts','reconciliation_account',
+                            'manual_requests','daily_cash_allocations','reviewed_statements','reviewed_statement_lines'}
+                if path.parent.name in pilots:
+                    counts['reviewed_pilot_live_databases'] += 1
+                    bound = db.execute('SELECT ucc FROM reconciliation_account').fetchall() if 'reconciliation_account' in names else []
+                    ucc = credential_ucc.get(path.parent.name)
+                    matches = (isinstance(ucc,str) and bound == [(ucc,)] and
+                               hashlib.sha256(ucc.encode()).hexdigest() == pilot_hashes[path.parent.name])
+                    counts['complete_pilot_live_schemas'] += int(required <= names and matches)
+                for table, label in (('daily_cash_allocations','live_cash_reviews'),('reviewed_statements','live_statement_reviews')):
+                    if table in names:
+                        counts[label] += db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
                 counts["live_orders"] += db.execute("SELECT COUNT(*) FROM intents").fetchone()[0]
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='fill_history'").fetchone():
                     counts["live_fills"] += db.execute("SELECT COUNT(*) FROM fill_history").fetchone()[0]
@@ -298,7 +332,7 @@ def verify(backup, backup_key, portal_key, work_dir):
         root.mkdir(mode=0o700)
         manifest = unpack(temp / "payload.tar", root)
         counts = inspect_state(root, portal_key)
-        if counts != manifest["counts"]:
+        if not counts_match(counts, manifest["counts"]):
             raise ValueError("Recovery inventory mismatch")
         return manifest
 
@@ -388,7 +422,7 @@ def restore(backup, destination, backup_key, portal_key, work_dir):
             )
             manifest = unpack(temp / "payload.tar", destination)
             counts = inspect_state(destination, portal_key)
-            if counts != manifest["counts"]:
+            if not counts_match(counts, manifest["counts"]):
                 raise ValueError("Recovery inventory mismatch")
             # Modify only restored control metadata. Never call set_enabled(), which cancels positions.
             with closing(sqlite3.connect(destination / "portal/accounts.db")) as db, db:

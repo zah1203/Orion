@@ -79,12 +79,33 @@ class MarkTests(unittest.TestCase):
         self.assertEqual(worker.cycle_from_broker()['action'], 'strategy-protection-requested')
         response['ucc'] = 'OTHER'
         before = len(self.session.sdk.stops)
-        with self.assertRaises(Refused): worker.cycle_from_broker()
+        self.assertEqual(worker.cycle_from_broker()["state"], "review-required")
         self.assertEqual(len(self.session.sdk.stops), before)
-        self.assertEqual(worker.monitor.health()['action'], 'broker-quote-failed')
+        self.assertTrue(worker.monitor.health()['action'].startswith('broker-quote-failed:'))
 
     def test_empty_exposure_skips_quote_request(self):
         self.session_with_quotes()
         self.ledger.db.execute('UPDATE intents SET filled=0')
         self.assertEqual(collect_marks(self.ledger,self.session), {})
         self.assertEqual(self.requests, [])
+
+    def test_unavailable_quotes_still_protect_confirmed_fills(self):
+        self.session_with_quotes(bid='NaN')
+        result = self.worker().cycle_from_broker()
+        self.assertEqual(result['state'], 'review-required')
+        self.assertEqual(result['action'], 'broker-quote-failed:strategy-protection-requested')
+        self.assertEqual(len(self.session.sdk.stops), 1)
+        self.assertEqual(self.session.sdk.stops[0]['prcTp'], 'SL')
+
+    def test_unavailable_quotes_still_cancel_expired_target_once(self):
+        strategy_test = fixtures.StrategyTests
+        target = strategy_test.to_target(self)
+        self.ledger.db.execute('UPDATE strategy_plans SET requested_at=?',
+            ((datetime.now(timezone.utc)-timedelta(seconds=11)).isoformat(),))
+        self.session_with_quotes(bid='NaN')
+        worker = self.worker()
+        self.assertEqual(worker.cycle_from_broker()['action'], 'broker-quote-failed:strategy-cancel-requested')
+        self.assertEqual(worker.cycle_from_broker()['action'], 'broker-quote-failed:cancel-confirmation-pending')
+        self.assertEqual(target['ordSt'], 'open')
+
+    cycle = fixtures.StrategyTests.cycle

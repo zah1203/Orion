@@ -4,7 +4,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [status, activate, backup-drill, verify-latest, disable, revoke-escrow]
+        options: [status, activate, backup-drill, verify-latest, live-drill, disable, revoke-escrow]
         default: status
   schedule:
     - cron: '30 23 * * *'

@@ -14,7 +14,10 @@ EnvironmentFile=/etc/orion/portal.env
 ExecStart=/opt/orion/current/.venv/bin/python -m orion.portal.supervisor
 Environment=NEO_LOG_FILE_ENABLED=false
 KillSignal=SIGINT
-TimeoutStopSec=35
+TimeoutStopSec=90
+RuntimeDirectory=orion-live
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 Restart=always
 RestartSec=5
 UMask=0077
@@ -23,6 +26,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/orion/portal
+ReadWritePaths=/run/orion-live
 
 [Install]
 WantedBy=multi-user.target

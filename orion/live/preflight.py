@@ -18,7 +18,7 @@ MARGIN_FIELDS = ('avlCash', 'totMrgnUsd', 'mrgnUsd', 'ordMrgn', 'reqdMrgn',
                  'avlMrgn', 'insufFund')
 
 
-def funding_preflight(router, session, source, *, accounting, marks, **quote):
+def funding_preflight(router, session, source, *, accounting, marks, cash=None, **quote):
     """Recheck current policy and ledger after the one-shot funding read.
 
     Do not hold an account/SQLite lock across network I/O. Re-evaluate the
@@ -30,7 +30,7 @@ def funding_preflight(router, session, source, *, accounting, marks, **quote):
         raise Refused('Committed preflight boundary required')
     if session.ucc != router.ucc:
         raise Refused('Funding session account mismatch')
-    candidate = router.quote(source, accounting=accounting, marks=marks, **quote)
+    candidate = router.quote(source, accounting=accounting, marks=marks, cash=cash, **quote)
     request = OrderRequest(
         tag='probe'+hashlib.sha256(source.encode()).hexdigest()[:32],
         symbol=candidate['symbol'], quantity=candidate['quantity'],
@@ -66,7 +66,7 @@ def funding_preflight(router, session, source, *, accounting, marks, **quote):
             raise ValueError
     except Exception:
         raise Refused('Candidate funding evidence rejected; no order submitted') from None
-    current = router.quote(source, accounting=accounting, marks=marks, **quote)
+    current = router.quote(source, accounting=accounting, marks=marks, cash=cash, **quote)
     # Includes reservation/loss/paused changes, not just quantity and price.
     if current != candidate:
         raise Refused('Candidate or ledger changed during funding check')

@@ -1,4 +1,4 @@
-"""Account-leased protection worker component; no production entrypoint yet.
+"""Account-leased protection worker component used by explicit monitoring startup.
 
 It manages existing exposure only. It cannot reserve or submit a BUY, activate
 Live, replace account credentials, or start/stop another worker. Tests use an
@@ -22,6 +22,15 @@ class ProtectionMonitor:
         self.protection = Protection(ledger)
         self.commands = Commands(ledger, session)
         self.observations = Observations(ledger, session.ucc, self.commands)
+        from .manual import install
+        install(self.db)
+        from .accounting import Accounting
+        from .cash import CashAllocation
+        from .execution import install_execution_tables
+        install_execution_tables(ledger)
+        CashAllocation(Accounting(ledger, session.ucc))
+        from .statements import install as install_statements
+        install_statements(self.db)
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS protection_policy(
                 entry_tag TEXT PRIMARY KEY, stop_limit TEXT NOT NULL);
@@ -70,7 +79,7 @@ class ProtectionMonitor:
             health_event(self.ledger, state, uncovered)
         return self.health()
 
-    def cycle(self, *, entries_allowed=False):
+    def cycle(self, *, entries_allowed=False, marks=None):
         """Read/reconcile, then at most one durable command; never sends entries.
 
         False is the default and cancels outstanding entries even without fills.
@@ -89,6 +98,10 @@ class ProtectionMonitor:
             if not entries_allowed:
                 self.ledger.pause()
             check_conflicts(self.db)
+            from .manual import process
+            manual = process(self, marks=marks or {})
+            if manual is not None:
+                return manual
             # Rejected/cancelled protection is not an invitation to submit an
             # endless replacement loop. Escalate once and keep reading books.
             if self.db.execute("SELECT 1 FROM live_incidents WHERE code IN ('unprotected-exposure','monitor-requires-review')").fetchone():
@@ -130,8 +143,8 @@ class AccountMonitor:
     """Lease the same account slot as Paper before opening an existing live DB.
 
     The session factory is invoked only AFTER the lease is acquired. A blocked
-    Paper worker slot therefore cannot trigger a competing broker login. No
-    automatic service currently constructs this class.
+    Paper worker slot therefore cannot trigger a competing broker login.
+    Neither Paper nor Live startup may bypass this lease.
     """
     def __init__(self, store, uid, session_factory, *, strategy=False, collect_trades=False):
         if type(strategy) is not bool or type(collect_trades) is not bool:
@@ -147,9 +160,7 @@ class AccountMonitor:
         self.lease = open(account/'worker.lock', 'a')
         try:
             fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if not (account/'live.db').is_file():
-                raise Refused('Existing live ledger required')
-            self.ledger = Ledger(account/'live.db', self.uid)
+            self.ledger = self._open_ledger(account/'live.db')
             self.session = self.session_factory()
             manager = ProtectionMonitor
             if self.strategy:
@@ -160,6 +171,11 @@ class AccountMonitor:
         except BaseException:
             self.__exit__()
             raise Refused('Account worker slot unavailable or ledger invalid') from None
+
+    def _open_ledger(self, path):
+        if not path.is_file():
+            raise Refused('Existing live ledger required')
+        return Ledger(path, self.uid)
 
     def bind_strategy(self, entry_tag, *, targets, stop_limit, target_timeout):
         """Transfer final confirmed exposure to exits without releasing the lease.
@@ -177,7 +193,7 @@ class AccountMonitor:
 
     def cycle_from_broker(self):
         """Use bound broker bids for existing exits; no entry authorization."""
-        if self.ledger is None or self.session is None or not self.strategy:
+        if self.ledger is None or self.session is None:
             raise Refused('Leased strategy worker required')
         from .marks import collect_marks
         with self.store.lock(self.uid):
@@ -185,9 +201,22 @@ class AccountMonitor:
                 marks = collect_marks(self.ledger, self.session)
             except Exception:
                 self.ledger.pause()
-                self.monitor._health('review-required', 'broker-quote-failed')
-                raise Refused('Broker exit quotes require review') from None
+                result = self.monitor.cycle(marks={})
+                return self.monitor._health('review-required', 'broker-quote-failed:' + result['action'])
             return self.monitor.cycle(marks=marks)
+
+    @property
+    def needs_quotes(self):
+        return self.strategy or bool(self.ledger and self.ledger.db.execute(
+            "SELECT 1 FROM manual_requests WHERE action='EXIT' AND state='PENDING'").fetchone())
+
+    def request_manual(self, **instruction):
+        """Internal worker API; authentication/confirmation belongs to its caller."""
+        if self.ledger is None or self.session is None or self.lease is None or self.lease.closed:
+            raise Refused('Active account worker lease required')
+        from .manual import request
+        with self.store.lock(self.uid):
+            return request(self.monitor, **instruction)
 
     def cycle(self, *, marks=None):
         if self.ledger is None:

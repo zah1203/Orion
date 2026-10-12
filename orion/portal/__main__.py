@@ -79,6 +79,8 @@ def main():
         except BlockingIOError:
             raise SystemExit("A worker/login operation already owns this account") from None
         creds = store.credentials(uid)
+        if a.command == "worker" and store.live_slot_reserved(uid):
+            raise SystemExit("Account is reserved for Live monitoring; Paper was not started")
         if a.command == "telegram-login":
             from telethon.sync import TelegramClient
             from telethon.sessions import StringSession

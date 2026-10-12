@@ -71,6 +71,16 @@ class ReadOnlyTests(unittest.TestCase):
                 summarize(ORDERS, POSITIONS, LIMITS | dict(Net=value), 'TEST1')
         self.assertEqual(summarize(ORDERS, POSITIONS, LIMITS | dict(Net='-1'), 'TEST1')['rms_net'],'-1')
 
+    def test_funds_allowlist_preserves_unknown_and_excludes_secrets(self):
+        value = summarize(ORDERS, POSITIONS, LIMITS | dict(Collateral='0', RmsPayInAmt='5000', token='private'), 'TEST1')
+        self.assertEqual(value['reported_funds']['RmsPayInAmt'], '5000')
+        self.assertEqual(value['reported_funds']['Collateral'], '0')
+        self.assertIsNone(value['reported_funds']['AdhocMargin'])
+        self.assertNotIn('private', json.dumps(value))
+        for bad in ('NaN', '-1', True):
+            with self.assertRaises(ProbeFailure):
+                summarize(ORDERS, POSITIONS, LIMITS | dict(Collateral=bad), 'TEST1')
+
     def test_invalid_auth_or_route_prevents_reads(self):
         for change in [dict(ucc='OTHER'), dict(kType='View'), dict(baseUrl='https://evil.example/path'),
                        dict(baseUrl='https://neo-gw.kotaksecurities.com@evil.example')]:

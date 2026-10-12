@@ -289,6 +289,56 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "versioning"):
             r.upload(path, "test-bucket", "daily/", s3)
 
+    def test_two_reviewed_live_ledgers_restore_in_quarantine_with_finance_schemas(self):
+        from types import SimpleNamespace
+        from orion.live.ledger import Ledger, Refused
+        from orion.live.monitor import ProtectionMonitor
+        from orion.live.reconciliation import Reconciliation
+        from orion.live.pilot import Pilot
+        from scripts.backup_operations import validate_live_drill
+        from test_live_pilot import LIMITS
+        pilot=Pilot(self.store)
+        self.store.save_credentials(self.bob, {'kotak_ucc':'SECONDTEST'})
+        ledgers=[]
+        try:
+            for uid in (self.uid,self.bob):
+                pilot.configure(self.uid,uid,LIMITS)
+                pilot.consent(uid,1)
+                ledger=Ledger(self.store.account_dir(uid)/'live.db',uid)
+                ledgers.append(ledger)
+                ledger.db.execute('PRAGMA wal_autocheckpoint=0')
+                ucc=self.store.credentials(uid)['kotak_ucc']
+                Reconciliation(ledger,ucc)
+                ProtectionMonitor(ledger,SimpleNamespace(ucc=ucc))
+                # Synthetic persisted financial metadata stays byte-identical.
+                ledger.db.execute("INSERT INTO daily_cash_allocations VALUES('2026-10-12','2026-10-12T00:00:00+00:00',?,?,?,'1000',0,?)",
+                                  (uid,ucc,'a'*64,'b'*64))
+            with patch('socket.socket',side_effect=AssertionError('Network forbidden')):
+                archive,manifest=self.backup()
+                destination=self.root/'two-live-restored'
+                report=r.restore(archive,destination,self.backup_key,self.key,self.work)
+            validate_live_drill(report)
+            self.assertEqual(report['verified_before_sanitizing']['live_cash_reviews'],2)
+            for uid in (self.uid,self.bob):
+                with sqlite3.connect(destination/'portal/accounts'/uid/'live.db') as db:
+                    self.assertEqual(db.execute('SELECT opening_cash FROM daily_cash_allocations').fetchone()[0],'1000')
+                with self.assertRaises(Refused):Ledger(destination/'portal/accounts'/uid/'live.db',uid)
+                self.assertTrue(pilot.status(uid)['reviewed'])
+            self.assertEqual(self.engine.state()['positions'],self.positions)
+        finally:
+            for ledger in ledgers:ledger.close()
+
+    def test_additive_recovery_counts_do_not_break_older_archives(self):
+        original=r.inspect_state
+        def old_counts(*args):
+            return {k:v for k,v in original(*args).items() if k not in r.LIVE_COUNT_FIELDS}
+        with patch.object(r,'inspect_state',side_effect=old_counts):
+            archive,manifest=self.backup()
+        report=r.restore(archive,self.root/'old-restored',self.backup_key,self.key,self.work)
+        self.assertTrue(report['paper_ledgers_unchanged'])
+        self.assertFalse(r.counts_match({'accounts':2},{'accounts':1}))
+        self.assertFalse(r.counts_match({'accounts':2},{'accounts':2,'unexpected':0}))
+
     def test_live_wal_snapshot_and_restore_revokes_pilot(self):
         from orion.live.ledger import Ledger, Limits, Refused
         from orion.live.accounting import Accounting

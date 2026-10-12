@@ -20,6 +20,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/orion/portal
+ReadWritePaths=-/run/orion-live
 
 [Install]
 WantedBy=multi-user.target

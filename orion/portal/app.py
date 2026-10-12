@@ -6,6 +6,7 @@ import hmac
 from ipaddress import ip_address
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -83,6 +84,36 @@ class Access(Strict):
 class LiveReadOnly(Strict):
     totp: str = Field(pattern=r"^[0-9]{6}$")
     confirmation: Literal["READ ONLY CHECK"]
+
+
+class LiveWorkerStart(Strict):
+    totp: str = Field(pattern=r"^[0-9]{6}$")
+    policy_version: int = Field(strict=True, gt=0)
+    confirmation: Literal["START LIVE MONITORING; ENTRIES REMAIN PAUSED"]
+
+
+class LiveWorkerStop(Strict):
+    confirmation: Literal["STOP ONLY AFTER VERIFIED FLAT"]
+
+
+class LiveManual(Strict):
+    request_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    entry_tag: str = Field(pattern=r"^orion[a-f0-9]{24}$")
+    action: Literal["CANCEL", "EXIT"]
+    limit_price: str | None = Field(default=None, max_length=30)
+    confirmation: Literal["CONFIRM LIVE ACTION"]
+
+
+class LiveCash(Strict):
+    opening_cash: str = Field(min_length=1, max_length=30)
+    confirmation: Literal["DEPOSITED CASH ONLY; NO EXTERNAL TRADES OR WITHDRAWALS; FEES ARE ESTIMATES"]
+
+
+class LiveStatement(Strict):
+    proof_base64: str | None = Field(default=None, min_length=4, max_length=13981016)
+    proof_text: str | None = Field(default=None, min_length=1, max_length=100000)
+    statement: dict
+    confirmation: Literal["I REVIEWED THE BROKER STATEMENT"]
 
 
 class Mode(Strict):
@@ -200,10 +231,20 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
                 return JSONResponse({"detail": "Origin rejected"}, status_code=403)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "JSON required"}, status_code=415)
+            maximum_body = 32768
+            if request.url.path == "/api/live/finance/statement":
+                try:
+                    uid = identity(request, True)["user_id"]
+                    connections.limit(uid, "live-statement", 3)
+                except HTTPException as exc:
+                    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+                except ConnectionError as exc:
+                    return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+                maximum_body = 16 * 1024 * 1024
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
-                if len(data) > 32768:
+                if len(data) > maximum_body:
                     return JSONResponse({"detail": "Request too large"}, status_code=413)
             request._body = bytes(data)
         response = await call_next(request)
@@ -448,6 +489,104 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
                 return await run_probe({k: creds[k] for k in required}, body.totp)
             except ProbeFailure as exc:
                 raise HTTPException(502, "Read-only broker check failed: " + exc.code) from None
+
+    @app.get("/api/live/finance")
+    def live_finance(request: Request):
+        from ..live.finance import snapshot
+        uid = identity(request)["user_id"]
+        try:
+            return snapshot(store, uid)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.get("/api/live/worker")
+    def live_worker_status(request: Request):
+        from ..live.activation import snapshot
+        try:
+            return snapshot(store, identity(request)["user_id"])
+        except ValueError:
+            raise HTTPException(409, "Live worker state requires review") from None
+
+    @app.post("/api/live/worker/start")
+    async def live_worker_start(body: LiveWorkerStart, request: Request):
+        from ..live.activation import send_request, preflight
+        uid = identity(request, True)["user_id"]
+        connections.limit(uid, "live-worker-start", 3)
+        try:
+            with store.lock(uid):
+                preflight(store, uid, body.policy_version)
+            if store.worker_running(uid):
+                raise HTTPException(409, "Account worker slot busy; no worker was stopped")
+            return await send_request(dict(uid=uid, **body.model_dump()))
+        except (ValueError, OSError, sqlite3.Error, KeyError, TypeError):
+            raise HTTPException(409, "Review pilot limits, saved connections and Paper handover before starting") from None
+
+    @app.post("/api/live/worker/stop")
+    def live_worker_stop(body: LiveWorkerStop, request: Request):
+        from ..live.activation import request_stop
+        try:
+            return request_stop(store, identity(request, True)["user_id"])
+        except ValueError:
+            raise HTTPException(409, "No reserved Live worker slot") from None
+
+    @app.post("/api/live/finance/cash")
+    def live_cash(body: LiveCash, request: Request):
+        from ..live.finance import review_cash
+        uid = identity(request, True)["user_id"]
+        try:
+            return review_cash(store, uid, **body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/live/finance/statement")
+    def live_statement(body: LiveStatement, request: Request):
+        import base64
+        from ..live.finance import review_fees
+        uid = identity(request, True)["user_id"]
+        try:
+            if (body.proof_text is None) == (body.proof_base64 is None):
+                raise ValueError('Exactly one original statement source required')
+            proof = body.proof_text.encode() if body.proof_text is not None else base64.b64decode(body.proof_base64, validate=True)
+            return review_fees(store, uid, proof=proof, statement=body.statement,
+                               confirmation=body.confirmation)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.get("/api/live/finance/statement/{day}")
+    def live_statement_template(day: str, request: Request):
+        from ..live.finance import statement_template
+        uid = identity(request)["user_id"]
+        try:
+            return statement_template(store, uid, day)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.get("/api/live/controls")
+    def live_controls(request: Request):
+        from ..live.controls import snapshot
+        uid = identity(request)["user_id"]
+        try:
+            return snapshot(store, uid)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/live/controls")
+    def live_manual(body: LiveManual, request: Request):
+        from ..live.controls import enqueue
+        uid = identity(request, True)["user_id"]
+        try:
+            return enqueue(store, uid, **body.model_dump(exclude={'confirmation'}))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/live/pause")
+    def live_pause(request: Request):
+        from ..live.controls import pause
+        uid = identity(request, True)["user_id"]
+        try:
+            return pause(store, uid)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
 
     @app.put("/api/mode")
     def mode(body: Mode, request: Request):

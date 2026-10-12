@@ -13,6 +13,17 @@ from .protection import Protection
 from .reconciliation import Reconciliation
 
 
+def install_execution_tables(ledger):
+    if ledger.db.in_transaction:
+        raise Refused("Schema initialization requires a committed boundary")
+    ledger.db.executescript('''
+            CREATE TABLE IF NOT EXISTS execution_terms(
+                tag TEXT PRIMARY KEY, stop TEXT NOT NULL, tick TEXT NOT NULL,
+                lot_size INTEGER NOT NULL, fee_reserve TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS execution_attempts(
+                tag TEXT PRIMARY KEY, at TEXT NOT NULL, day TEXT NOT NULL);
+        ''')
+
 class SimulatedBroker:
     """Deterministic test double, not a brokerage connection."""
     def __init__(self):
@@ -40,13 +51,7 @@ class ExecutionHarness:
         self.accounting = Accounting(ledger, ucc)
         self.protection = Protection(ledger)
         self.ucc = ucc
-        ledger.db.executescript('''
-            CREATE TABLE IF NOT EXISTS execution_terms(
-                tag TEXT PRIMARY KEY, stop TEXT NOT NULL, tick TEXT NOT NULL,
-                lot_size INTEGER NOT NULL, fee_reserve TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS execution_attempts(
-                tag TEXT PRIMARY KEY, at TEXT NOT NULL, day TEXT NOT NULL);
-        ''')
+        install_execution_tables(ledger)
 
     def check_book(self, orders, positions, now):
         return self.reconciliation.compare(orders, positions, started_at=now,

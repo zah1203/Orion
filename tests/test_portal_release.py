@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+import sqlite3
+from contextlib import closing
 
 from scripts.portal_release import activate, DROPIN, MARKER
 
@@ -23,7 +25,9 @@ class PortalReleaseTests(unittest.TestCase):
         self.active=True; self.fail_restart=False; self.change_worker=False
         self.health_calls=0; self.fail_health=False
         state=self.root/'var/lib/orion/portal'; state.mkdir(parents=True)
-        (state/'accounts.db').write_bytes(b'unchanged accounts')
+        with closing(sqlite3.connect(state/'accounts.db')) as db:
+            db.execute('CREATE TABLE users(id TEXT)')
+        self.original_accounts = (state/'accounts.db').read_bytes()
         (state/'paper.db').write_bytes(b'unchanged positions')
 
     def fake_run(self,args,**kwargs):
@@ -52,7 +56,7 @@ class PortalReleaseTests(unittest.TestCase):
     def assert_paper_untouched(self):
         self.assertEqual((self.root/'opt/orion/current').resolve(),self.old)
         state=self.root/'var/lib/orion/portal'
-        self.assertEqual((state/'accounts.db').read_bytes(),b'unchanged accounts')
+        self.assertEqual((state/'accounts.db').read_bytes(),self.original_accounts)
         self.assertEqual((state/'paper.db').read_bytes(),b'unchanged positions')
         mutations=[a for a in self.calls if a[1] in ('stop','start','restart','enable','disable')]
         self.assertTrue(all(a==['systemctl','restart','orion-portal.service'] for a in mutations))
@@ -103,3 +107,14 @@ class PortalReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'rollback needs operator review'):
             activate(SHA,root=self.root,run=self.fake_run,health=unhealthy)
         self.assertEqual(self.restarts,2); self.assert_paper_untouched()
+
+    def test_reserved_live_slot_or_corrupt_database_blocks_all_service_changes(self):
+        path=self.root/'var/lib/orion/portal/accounts.db'
+        with closing(sqlite3.connect(path)) as db:
+            db.execute('CREATE TABLE live_worker_slots(reserved INTEGER)')
+            db.execute('INSERT INTO live_worker_slots VALUES(1)'); db.commit()
+        with self.assertRaisesRegex(RuntimeError,'reserved'): self.activate()
+        self.assertFalse(self.dropin.exists()); self.assertEqual(self.calls,[])
+        path.write_bytes(b'corrupt fixture')
+        with self.assertRaisesRegex(RuntimeError,'preflight'): self.activate()
+        self.assertEqual(self.calls,[])

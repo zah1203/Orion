@@ -41,6 +41,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS broker_sessions(user_id TEXT PRIMARY KEY REFERENCES users(id),ciphertext BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS worker_health(user_id TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS worker_status(user_id TEXT PRIMARY KEY,at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS live_worker_slots(
+                uid TEXT PRIMARY KEY REFERENCES users(id), policy_version INTEGER NOT NULL,
+                reserved INTEGER NOT NULL, stop_requested INTEGER NOT NULL DEFAULT 0);
             """)
         # Serialize migration when portal and supervisor start together.
         # Existing pilot access is retained; new registrations await approval.
@@ -280,7 +283,14 @@ class Store:
 
     def set_enabled(self, uid, enabled):
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if enabled and db.execute("SELECT 1 FROM live_worker_slots WHERE uid=? AND reserved=1", (uid,)).fetchone():
+                raise ValueError("Stop Live monitoring after a verified flat broker check before enabling Paper")
             db.execute("UPDATE users SET enabled=? WHERE id=?", (int(enabled), uid))
+
+    def live_slot_reserved(self, uid):
+        with self.db() as db:
+            return bool(db.execute("SELECT 1 FROM live_worker_slots WHERE uid=? AND reserved=1", (uid,)).fetchone())
 
     def health(self, uid, values=None):
         with self.db() as db:

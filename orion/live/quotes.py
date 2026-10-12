@@ -8,6 +8,10 @@ from .readonly import integer
 from .reconciliation import text_field
 
 
+class QuoteUnavailable(Refused):
+    """Correct instrument, but no current price; book reads may still work."""
+
+
 def instruments(values):
     if not isinstance(values, list) or not 1 <= len(values) <= 50:
         raise Refused('One to fifty bound instruments required')
@@ -35,7 +39,7 @@ def normalize_quotes(response, expected, *, now):
         seen.add(token)
         at = datetime.fromtimestamp(integer(row.get('lstup_time')), timezone.utc)
         if not 0 <= (now-at).total_seconds() <= 5:
-            raise Refused('Stale broker quote')
+            raise QuoteUnavailable('Stale broker quote')
         sides = []
         for name, reverse in (('buy', True), ('sell', False)):
             depth = row.get('depth', {}).get(name)
