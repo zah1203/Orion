@@ -9,6 +9,7 @@ import sqlite3
 # These are code/acceptance blockers, not values that a repository variable can
 # override. Keep this list aligned with docs/live-release.md.
 BLOCKERS = (
+    'paper-capital-and-trade-history-reconciliation',
     'production-signal-quote-worker-and-account-routing',
     'production-exit-routing-and-reviewed-stop-gap-policy',
     'broker-verified-cash-fees-and-dispatch-authorization',
