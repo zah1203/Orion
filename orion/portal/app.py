@@ -6,6 +6,7 @@ import hmac
 from ipaddress import ip_address
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -83,6 +84,16 @@ class Access(Strict):
 class LiveReadOnly(Strict):
     totp: str = Field(pattern=r"^[0-9]{6}$")
     confirmation: Literal["READ ONLY CHECK"]
+
+
+class LiveWorkerStart(Strict):
+    totp: str = Field(pattern=r"^[0-9]{6}$")
+    policy_version: int = Field(strict=True, gt=0)
+    confirmation: Literal["START LIVE MONITORING; ENTRIES REMAIN PAUSED"]
+
+
+class LiveWorkerStop(Strict):
+    confirmation: Literal["STOP ONLY AFTER VERIFIED FLAT"]
 
 
 class LiveManual(Strict):
@@ -487,6 +498,36 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
             return snapshot(store, uid)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from None
+
+    @app.get("/api/live/worker")
+    def live_worker_status(request: Request):
+        from ..live.activation import snapshot
+        try:
+            return snapshot(store, identity(request)["user_id"])
+        except ValueError:
+            raise HTTPException(409, "Live worker state requires review") from None
+
+    @app.post("/api/live/worker/start")
+    async def live_worker_start(body: LiveWorkerStart, request: Request):
+        from ..live.activation import send_request, preflight
+        uid = identity(request, True)["user_id"]
+        connections.limit(uid, "live-worker-start", 3)
+        try:
+            with store.lock(uid):
+                preflight(store, uid, body.policy_version)
+            if store.worker_running(uid):
+                raise HTTPException(409, "Account worker slot busy; no worker was stopped")
+            return await send_request(dict(uid=uid, **body.model_dump()))
+        except (ValueError, OSError, sqlite3.Error, KeyError, TypeError):
+            raise HTTPException(409, "Review pilot limits, saved connections and Paper handover before starting") from None
+
+    @app.post("/api/live/worker/stop")
+    def live_worker_stop(body: LiveWorkerStop, request: Request):
+        from ..live.activation import request_stop
+        try:
+            return request_stop(store, identity(request, True)["user_id"])
+        except ValueError:
+            raise HTTPException(409, "No reserved Live worker slot") from None
 
     @app.post("/api/live/finance/cash")
     def live_cash(body: LiveCash, request: Request):

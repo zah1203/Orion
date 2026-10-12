@@ -1,7 +1,7 @@
 """Combined account lifecycle for source admission and existing-exposure control.
 
-No BUY dispatch, activation, production service registration or automatic login.
-A caller supplies an explicitly authenticated bounded session factory and owns
+No BUY dispatch or automatic login. The explicit activation launcher or another
+caller supplies an authenticated bounded session factory and owns
 shutdown. Every network dependency is injectable for isolated acceptance tests.
 """
 import asyncio
@@ -15,7 +15,8 @@ from .source import receive_signals, telegram_client
 
 async def serve_account(store, uid, master_provider, session_factory, *, stop,
                         strategy=False, collect_trades=True, poll_seconds=2,
-                        _client_factory=telegram_client, _monitor_factory=AccountMonitor):
+                        _client_factory=telegram_client, _monitor_factory=AccountMonitor,
+                        _on_started=None, _after_cycle=None):
     """Share one lease/ledger/session; source loss never abandons exposure.
 
     Broker calls are serialized on the ledger-owning thread. The bounded session
@@ -44,6 +45,8 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
         source_failure_recorded = False
         health()
         try:
+            if _on_started is not None:
+                _on_started(account)
             while not stop.is_set():
                 # Give Telegram callbacks time on the same SQLite-owning thread.
                 await asyncio.sleep(0)
@@ -68,6 +71,8 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
                     # adapter itself refuses calls after a transport failure.
                 cycles += 1
                 health()
+                if _after_cycle is not None and _after_cycle(account):
+                    stop.set()
                 try:
                     await asyncio.wait_for(stop.wait(),timeout=poll_seconds)
                 except asyncio.TimeoutError:

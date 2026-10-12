@@ -1,5 +1,6 @@
 """Activate a tested portal release without switching or restarting Paper code."""
 from pathlib import Path
+from contextlib import closing
 import re
 import subprocess
 import time
@@ -52,6 +53,12 @@ def portal_health(root):
 
 
 def activate(release_id, *, root=Path('/'), run=subprocess.run, health=portal_health):
+    from scripts.live_deploy_guard import acquire_deployment_lease
+    with closing(acquire_deployment_lease(root)):
+        return _activate(release_id, root=root, run=run, health=health)
+
+
+def _activate(release_id, *, root, run, health):
     if not re.fullmatch('[0-9a-f]{40}', release_id):
         raise ValueError('Expected Git commit')
     release = root/'opt/orion/releases'/release_id
@@ -73,7 +80,8 @@ def activate(release_id, *, root=Path('/'), run=subprocess.run, health=portal_he
     pinned = '/opt/orion/releases/'+release_id
     override = (MARKER+'[Service]\nWorkingDirectory='+pinned+'\nExecStart=\nExecStart='+pinned+
                 '/.venv/bin/python -m uvicorn orion.portal.app:factory --factory --host 127.0.0.1 '
-                '--port 8000 --workers 1 --no-proxy-headers --no-access-log\n')
+                '--port 8000 --workers 1 --no-proxy-headers --no-access-log\n'
+                'ReadWritePaths=-/run/orion-live\n')
     try:
         atomic_write(dropin, override.encode())
         run(['systemctl', 'daemon-reload'], check=True)

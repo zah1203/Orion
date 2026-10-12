@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import LiveControls from "./LiveControls";
 import LiveFinance from "./LiveFinance";
 import LiveFees from "./LiveFees";
+import LiveWorker from "./LiveWorker";
 
 type Policy = {
   policy_complete: boolean; enrolled: boolean; reviewed: boolean; version: number | null;
@@ -76,6 +77,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
   return <View style={s.card}>
     <Text style={s.title}>Live pilot preparation</Text>
     <Text style={s.text}>Live trading is unavailable. Enrollment and limit review do not enable orders.</Text>
+    <LiveWorker key={"worker-" + uid} uid={uid} version={policy?.version ?? null} reviewed={!!policy?.reviewed} />
     {!owner && <LiveControls key={uid} uid={uid} />}
     <LiveFinance key={"finance-" + uid} uid={uid} />
     <LiveFees key={"fees-" + uid} />

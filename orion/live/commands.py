@@ -1,7 +1,7 @@
 """Durable handoff of already-dispatched intents to the bounded SDK process.
 
 Not an entry gate: callers must first authorize/reserve/mark dispatching under
-the account lease. No current portal, runtime or supervisor calls this module.
+the account lease. Monitoring activation permits protective management only.
 """
 from dataclasses import asdict
 from datetime import datetime, timezone

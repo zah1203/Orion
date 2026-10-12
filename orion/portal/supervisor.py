@@ -20,6 +20,8 @@ class Supervisor:
 
     def wanted(self, user):
         uid = user["id"]
+        if self.store.live_slot_reserved(uid):
+            return False
         # Suspension and pause block entries, but retain monitoring for open paper positions.
         active = self.accounts.active_positions(uid)
         if not active and not (user["access"] == "approved" and self.store.user(uid)["enabled"]):
@@ -62,12 +64,20 @@ class Supervisor:
                 )
 
     async def run(self):
+        from ..live.activation import ActivationServer
+        activation = ActivationServer(self.store, self.master, os.environ['ORION_PORTAL_KEY_FILE'])
         try:
+            try:
+                await activation.start()
+            except Exception:
+                # An unavailable optional activation socket must not take down
+                # unrelated Paper workers. Do not log exception/secret content.
+                print('Live activation unavailable; Paper supervision continues.', flush=True)
             while True:
                 await self.tick()
                 await asyncio.sleep(5)
         finally:
-            await asyncio.gather(*(self.stop(uid) for uid in list(self.children)))
+            await asyncio.gather(activation.close(), *(self.stop(uid) for uid in list(self.children)))
 
 
 def main():

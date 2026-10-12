@@ -1,8 +1,9 @@
 # Consolidated Live acceptance record
 
 This working batch is based on merged release `e5fd6997b11762e2d023c316a13d08ec2b20bfce`.
-It does not enable Live, submit real orders, start services, authenticate to Kotak,
-change Paper settings, or establish AWS recovery acceptance. Keep the batch on
+Implementation and local validation have not enabled Live, submitted real orders,
+started services, authenticated to Kotak, changed Paper settings, or established
+AWS recovery acceptance. Keep the batch on
 one branch until the remaining integration is ready for a single review.
 
 ## Confirmed pilot scope
@@ -79,7 +80,8 @@ Live trade controls**. Check the instrument and open quantity before confirming.
    an empty position from a command acknowledgement. Avoid competing manual
    broker orders while Orion has unresolved commands.
 
-No resume/activation control is added by this batch. A new signal cannot reuse a
+Monitoring activation is described in [live-worker-activation.md](live-worker-activation.md).
+No entry-resume control is added. A new signal cannot reuse a
 previous signal's durable entry identity after a manual exit.
 
 ## Remaining acceptance work
@@ -87,8 +89,8 @@ previous signal's durable entry identity after a manual exit.
 | Requirement | Evidence still required |
 | --- | --- |
 | Cash-only funding and fees | Compare fresh account data with broker funds records; validate the implemented cash allocation and fee model against settlement and unexpected changes. |
-| Production BUY coordinator | Coordinator and bounded market adapter implemented and locally tested; actual broker evidence, production launcher/handover and account-specific activation remain required. |
-| Worker deployment and handover | Production startup, authentication lifecycle, alerts and planned account handover that preserves existing Paper positions/workers until explicitly scheduled. |
+| Production BUY coordinator | Coordinator and bounded market adapter implemented and locally tested; actual broker evidence and account-specific real-money entry authorization remain required. |
+| Worker deployment and handover | Own-account monitoring launcher and authentication lifecycle implemented; scheduled deployment, installed-service verification and actual account handover remain required. Existing Paper workers are preserved until explicitly scheduled. |
 | AWS recovery | Restore an actual Live ledger backup into isolation and verify its account, fills and keys without production writes. Existing Paper backup success does not establish this. |
 | Broker acceptance | Validate contract mapping/static egress and both accounts' read-only evidence; obtain specific approval for a supervised real order and verify fills, cancellation and protection. |
 
@@ -129,3 +131,20 @@ final market-operation allowlist change passed all three market tests, including
 real subprocess framing with a fake SDK and continued REST reads after missing
 market status. This is synthetic broker validation, not a real broker login.
 The previously validated frontend is unchanged by this coordinator/recovery step.
+
+## Monitoring worker activation
+
+The Account screen now provides own-account reviewed startup with a current TOTP,
+paused entries, durable account reservation and verified-flat stop. The existing
+supervisor owns isolated children; duplicate login, automatic reauthentication,
+Paper takeover after a crash and deployment over reserved Live slots are blocked.
+See [live-worker-activation.md](live-worker-activation.md) for the scheduled full
+deployment and per-account handover requirements. The real-money entry gate
+remains closed.
+
+Activation validation: the full local suite ran 518 tests successfully with one
+Unix-socket integration test skipped because the local runtime denies sockets.
+The final activation/failure-isolation refinements passed all 14 focused tests
+with the same one skip. TypeScript checking, lint and production web export also
+passed. Linux CI must run the socket integration check; actual EC2/systemd and
+broker acceptance are still outstanding.

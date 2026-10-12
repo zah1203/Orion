@@ -1,4 +1,4 @@
-"""Bounded, account-bound process session. Not wired to production entrypoints.
+"""Bounded, account-bound process session used by reviewed monitoring startup.
 
 Credentials and responses use an anonymous pipe, never argv/environment/files.
 Timeout/cancellation kills and reaps the child; callers must retain UNKNOWN

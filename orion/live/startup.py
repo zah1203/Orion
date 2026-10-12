@@ -31,12 +31,16 @@ class ProtectiveSession:
     def close(self):
         self._session.close()
 
+    @property
+    def closed(self):
+        return getattr(self._session, 'closed', False) is True
+
 
 class ReviewedAccountMonitor(AccountMonitor):
     """Authenticate once, only after the shared worker lease and ledger checks.
 
-    This is a component for an explicit future launcher, not a service or a Live
-    activation switch. Revocation prevents new startup. Once started, the existing
+    The monitoring launcher uses this without granting entry permission.
+    Revocation prevents new startup. Once started, the existing
     monitor can continue protecting exposure without granting new entry authority.
     """
     def __init__(self, store, uid, policy_version, totp, *, strategy=False,

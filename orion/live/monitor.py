@@ -1,4 +1,4 @@
-"""Account-leased protection worker component; no production entrypoint yet.
+"""Account-leased protection worker component used by explicit monitoring startup.
 
 It manages existing exposure only. It cannot reserve or submit a BUY, activate
 Live, replace account credentials, or start/stop another worker. Tests use an
@@ -143,8 +143,8 @@ class AccountMonitor:
     """Lease the same account slot as Paper before opening an existing live DB.
 
     The session factory is invoked only AFTER the lease is acquired. A blocked
-    Paper worker slot therefore cannot trigger a competing broker login. No
-    automatic service currently constructs this class.
+    Paper worker slot therefore cannot trigger a competing broker login.
+    Neither Paper nor Live startup may bypass this lease.
     """
     def __init__(self, store, uid, session_factory, *, strategy=False, collect_trades=False):
         if type(strategy) is not bool or type(collect_trades) is not bool:
@@ -160,9 +160,7 @@ class AccountMonitor:
         self.lease = open(account/'worker.lock', 'a')
         try:
             fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if not (account/'live.db').is_file():
-                raise Refused('Existing live ledger required')
-            self.ledger = Ledger(account/'live.db', self.uid)
+            self.ledger = self._open_ledger(account/'live.db')
             self.session = self.session_factory()
             manager = ProtectionMonitor
             if self.strategy:
@@ -173,6 +171,11 @@ class AccountMonitor:
         except BaseException:
             self.__exit__()
             raise Refused('Account worker slot unavailable or ledger invalid') from None
+
+    def _open_ledger(self, path):
+        if not path.is_file():
+            raise Refused('Existing live ledger required')
+        return Ledger(path, self.uid)
 
     def bind_strategy(self, entry_tag, *, targets, stop_limit, target_timeout):
         """Transfer final confirmed exposure to exits without releasing the lease.

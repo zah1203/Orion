@@ -42,13 +42,16 @@ subprocess.run([python, "-m", "unittest", "discover", "-s", "tests"], cwd=releas
 if a.mode == "stage":
     print("Release staged and tested; no services or active release pointers changed.")
     raise SystemExit(0)
+import sys
+sys.path.insert(0, str(release))
 if a.mode == "portal":
     # Import from the checksum-verified extracted release, not the SSM bootstrap.
-    import sys
-    sys.path.insert(0, str(release))
     from scripts.portal_release import activate
     activate(a.release)
     raise SystemExit(0)
+from scripts.live_deploy_guard import acquire_deployment_lease
+# Retain the exclusive lease until this installer exits; no startup can race it.
+deployment_lease = acquire_deployment_lease()
 # Full deployments explicitly replace the managed portal-only override too.
 override = Path("/etc/systemd/system/orion-portal.service.d/90-orion-release.conf")
 if override.exists():
