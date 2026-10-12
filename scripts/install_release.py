@@ -9,16 +9,23 @@ import tarfile
 import tempfile
 import boto3
 
-def prepare_release(release, archive, *, run=subprocess.run,
+def prepare_release(release, archive, *, promote_portal=False, run=subprocess.run,
                     current=Path("/opt/orion/current"),
                     override=Path("/etc/systemd/system/orion-portal.service.d/90-orion-release.conf")):
     """Verify reusable staged content, never overwrite it or reinstall its venv."""
     if any(p.is_symlink() for p in (release, *release.parents)):
         raise SystemExit("Linked release path refused")
     existing = release.exists()
-    if existing and (current.resolve() == release.resolve() or
-                     (override.exists() and str(release) in override.read_text())):
-        raise SystemExit("Release is already active; no services changed")
+    if existing and current.resolve() == release.resolve():
+        raise SystemExit("Release is already active for workers; no services changed")
+    if override.is_symlink():
+        raise SystemExit("Linked portal override requires review")
+    if existing and override.exists() and str(release) in override.read_text():
+        managed = override.read_text().startswith("# Managed by Orion portal-only deployment\n")
+        if not promote_portal or not managed:
+            raise SystemExit("Release is already active; no services changed")
+        # Full promotion may reuse the portal's immutable tree. The inventory and
+        # tests below still run; no extraction or pip install touches active code.
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
         names = set()
@@ -80,7 +87,7 @@ def main():
         boto3.client("s3", region_name="ap-south-1").download_file(a.bucket, a.key, str(archive))
         if hashlib.sha256(archive.read_bytes()).hexdigest() != a.sha256:
             raise SystemExit("Checksum mismatch")
-        prepare_release(release, archive)
+        prepare_release(release, archive, promote_portal=a.mode == "full")
     if a.mode == "stage":
         print("Release staged and tested; no services or active release pointers changed.")
         raise SystemExit(0)
