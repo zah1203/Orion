@@ -41,6 +41,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [target, setTarget] = useState(uid);
   const [advanced, setAdvanced] = useState(false);
+  const [executionExpanded, setExecutionExpanded] = useState(false);
   const [loadedPreferencesKey, setLoadedPreferencesKey] = useState("");
   const preferencesKey = uid + ":" + target;
   const preferencesLoaded = advanced || loadedPreferencesKey === preferencesKey;
@@ -79,6 +80,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
         if (mounted) {
           setValues(Object.fromEntries(Object.entries({ ...(result.preferences || {}), ...(result.execution || {}) }).map(([k, v]) => [k, String(v)])));
           setLoadedPreferencesKey(preferencesKey);
+          setExecutionExpanded(false);
         }
       }).catch(() => { if (mounted) setError("Saved Live preferences could not be loaded. Retry before editing."); });
     }
@@ -141,7 +143,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
     </> : null}
     {owner ? <>
       <Text style={s.title}>Your Live risk settings</Text>
-      <Text style={s.text}>Select an account and save five risk preferences. These are saved for setup only: they do not replace an active policy, enroll the account or start trading. Paper settings stay unchanged.</Text>
+      <Text style={s.text}>Choose an account and enter five values. Save a draft or apply them below. Applying requires account review before use.</Text>
       <Text style={s.text}>Lots and entries are maximums, not targets. A trade may be smaller or skipped when cash or the remaining daily loss budget is insufficient. Real losses can exceed planned limits.</Text>
       <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setAdvanced(!advanced); setValues({}); setLoadedPreferencesKey(""); setNotice(""); setError(""); }}>
         <Text style={s.text}>{advanced ? "Back to five risk preferences" : "Advanced execution policy"}</Text>
@@ -177,17 +179,27 @@ export default function LivePilot({ owner, uid, users = [] }: {
       {!advanced && <>
         <Text style={s.title}>Apply these five values</Text>
         <Text style={s.text}>Order and total open premium caps will equal capital; combined planned open risk will equal the daily loss limit. Cash, fees and remaining loss budget still reduce trade size. Applying creates a new policy that the account must review.</Text>
-        <Text style={s.text}>Before the first application, enter the reviewed execution assumptions below. These cannot be inferred from Paper profits or your five risk values. The fee reserve is an estimate per trade; a stop-limit gap does not guarantee an exit fill.</Text>
-        {fields.filter(([key]) => ["fee_reserve", "stop_gap_ticks", "target_timeout_seconds"].includes(key)).map(([key, label]) => <View key={key} style={{ gap: 5 }}>
+        <Text style={s.text}>Fee and exit settings are set once per account and reused. Change them only when needed.</Text>
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: executionExpanded }} disabled={busy}
+          onPress={() => setExecutionExpanded(!executionExpanded)}>
+          <Text style={s.text}>{executionExpanded ? "Hide fee and exit settings" :
+            ["fee_reserve", "stop_gap_ticks", "target_timeout_seconds"].every((key) => values[key]?.trim())
+              ? "Review fee and exit settings" : "Set up fee and exit settings once"}</Text>
+        </Pressable>
+        {executionExpanded && <Text style={s.text}>Fees are estimated per trade. A stop-limit order may not fill; the timeout begins when a target sell is requested.</Text>}
+        {executionExpanded && fields.filter(([key]) => ["fee_reserve", "stop_gap_ticks", "target_timeout_seconds"].includes(key)).map(([key, label]) => <View key={key} style={{ gap: 5 }}>
           <Text style={s.text}>{label}</Text>
           <TextInput accessibilityLabel={label} value={values[key] || ""} keyboardType="decimal-pad"
             editable={!busy && preferencesLoaded} style={s.input}
             onChangeText={(value) => setValues((old) => ({ ...old, [key]: value }))} />
         </View>)}
-        {button("Apply five values and reviewed execution settings", async () => {
+        {button("Apply risk settings", async () => {
           if (!preferencesLoaded) throw new Error("Wait for saved preferences to load.");
           const keys = [...preferenceKeys, "fee_reserve", "stop_gap_ticks", "target_timeout_seconds"];
-          if (keys.some((key) => !values[key]?.trim())) throw new Error("Enter five risk values and the reviewed fee and exit settings.");
+          if (keys.some((key) => !values[key]?.trim())) {
+            setExecutionExpanded(true);
+            throw new Error("Complete the five values and one-time fee and exit setup.");
+          }
           const counts = ["max_lots", "max_entries", "stop_gap_ticks", "target_timeout_seconds"];
           const limits = Object.fromEntries(keys.map((key) => [key, counts.includes(key) ? Number(values[key]) : values[key].trim()]));
           await api("/admin/live/simple-policy/" + target, { limits }, "PUT");
