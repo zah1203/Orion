@@ -95,7 +95,7 @@ class Protection:
             self.db.execute("UPDATE control SET paused=1 WHERE id=1")
         return self.get(tag)
 
-    def prepare_limit(self, entry_tag, *, quantity, limit_price, tick_size, lot_size):
+    def prepare_limit(self, entry_tag, *, quantity, limit_price, tick_size, lot_size, manual_request_id=None):
         """Reserve a target sell from free confirmed units only, never stop capacity."""
         positive_int(quantity); positive_int(lot_size)
         price, tick = amount(limit_price), amount(tick_size)
@@ -103,7 +103,11 @@ class Protection:
             raise Refused('Whole-lot tick-aligned exit required')
         with self.ledger.transaction():
             self._check_conflicts()
-            if self.db.execute('SELECT 1 FROM live_incidents').fetchone():
+            if manual_request_id is not None:
+                from .manual import authorize_exit
+                authorize_exit(self.db, entry_tag=entry_tag, quantity=quantity,
+                               limit_price=price, request_id=manual_request_id)
+            elif self.db.execute('SELECT 1 FROM live_incidents').fetchone():
                 raise Refused('Target blocked by unresolved incident')
             if self._unreserved(entry_tag) < quantity:
                 raise Refused('Target exceeds free confirmed exposure')
@@ -180,8 +184,10 @@ class Protection:
             self.incident('protective-observation-conflict')
             raise
         planned = False
-        if status == 'CANCELLED' and self.db.execute("SELECT 1 FROM sqlite_master WHERE name='strategy_cancellations'").fetchone():
-            planned = bool(self.db.execute('''SELECT 1 FROM strategy_cancellations s
+        for table in ('strategy_cancellations', 'manual_cancellations'):
+            if status != 'CANCELLED' or not self.db.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone():
+                continue
+            planned = planned or bool(self.db.execute(f'''SELECT 1 FROM {table} s
                 JOIN broker_commands c ON c.tag=s.tag AND c.operation='cancel'
                 WHERE s.tag=? AND c.broker_id=? AND c.status IN ('ACKNOWLEDGED','CONFIRMED')''',
                 (tag, broker_id)).fetchone())

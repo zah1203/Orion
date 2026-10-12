@@ -203,3 +203,16 @@ class BackupOperationsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class LiveDrillEvidenceTests(unittest.TestCase):
+    def test_paper_only_one_account_incomplete_schema_and_changed_live_bytes_refused(self):
+        valid=dict(live_ledgers_unchanged=True,network_started=False,live_reconciliation_required=True,
+            verified_before_sanitizing=dict(reviewed_live_owners=1,reviewed_live_pilots=2,reviewed_pilot_live_databases=2,complete_pilot_live_schemas=2))
+        ops.validate_live_drill(valid)
+        for changes in (dict(verified_before_sanitizing={}),dict(live_ledgers_unchanged=False),
+                        dict(network_started=True),dict(live_reconciliation_required=False)):
+            with self.assertRaises(ValueError):ops.validate_live_drill(valid|changes)
+        for key in valid['verified_before_sanitizing']:
+            for value in (0,2,3,True,'1') if key == 'reviewed_live_owners' else (0,1,3,True,'2'):
+                with self.assertRaises(ValueError):
+                    ops.validate_live_drill(valid|dict(verified_before_sanitizing=valid['verified_before_sanitizing']|{key:value}))

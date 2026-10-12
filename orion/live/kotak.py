@@ -217,9 +217,20 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker funding evidence rejected') from None
 
+    def market(self):
+        from .market import read
+        self._check()
+        try:
+            value = read(self.client)
+        except Refused:
+            value = dict(segment='nse_fo', status_code=None,
+                         observed_at=datetime.now(timezone.utc).isoformat(), market_unavailable=True)
+        self._check()
+        return dict(value, ucc=self.ucc, order_submission_available=False)
+
     def quotes(self, requested):
         """Account-session-bound depth reads; no market-open assertion or retry."""
-        from .quotes import instruments, normalize_quotes
+        from .quotes import instruments, normalize_quotes, QuoteUnavailable
         expected = instruments(requested)
         self._check()
         try:
@@ -227,6 +238,10 @@ class KotakSession:
                                           for token in expected], quote_type='all')
             self._check()
             return dict(ucc=self.ucc, quotes=normalize_quotes(response, expected, now=datetime.now(timezone.utc)),
+                        market_open_verified=False, order_submission_available=False)
+        except QuoteUnavailable:
+            self._check()
+            return dict(ucc=self.ucc, quotes=[], quotes_unavailable=True,
                         market_open_verified=False, order_submission_available=False)
         except Exception:
             self.closed = True

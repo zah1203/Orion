@@ -119,7 +119,17 @@ def validate_receipt(receipt, config):
             raise ValueError("Unexpected key escrow identity")
 
 
-def drill(s3, secrets, config, receipt):
+def validate_live_drill(report):
+    counts = report.get('verified_before_sanitizing', {})
+    if (report.get('live_ledgers_unchanged') is not True or report.get('network_started') is not False
+            or report.get('live_reconciliation_required') is not True
+            or type(counts.get('reviewed_live_owners')) is not int or counts['reviewed_live_owners'] != 1
+            or any(type(counts.get(k)) is not int or counts[k] != 2 for k in (
+                'reviewed_live_pilots','reviewed_pilot_live_databases','complete_pilot_live_schemas'))):
+        raise ValueError('Two reviewed pilot ledgers with complete Live schemas must be restored unchanged')
+
+
+def drill(s3, secrets, config, receipt, *, require_live=False):
     from orion.recovery import sha
     validate_receipt(receipt, config)
     with tempfile.TemporaryDirectory(prefix="orion-isolated-drill-") as tmp:
@@ -148,7 +158,10 @@ def drill(s3, secrets, config, receipt):
         report = json.loads(result.stdout)
         if not report.get("paper_ledgers_unchanged") or report.get("network_started") is not False:
             raise ValueError("Recovery evidence invalid")
+        if require_live:
+            validate_live_drill(report)
         return {"isolated_restore_verified": True, "source": item, "key_versions": receipt["key_versions"],
+                "two_account_live_restore_verified": require_live,
                 "counts": report["verified_before_sanitizing"], "verified_at": datetime.now(timezone.utc).isoformat()}
 
 
@@ -179,9 +192,9 @@ def main():
             receipt = send(ssm, instance, agent_command("activate", "--config", "/opt/orion/backup/current/activation.json"))
         report = drill(s3, secrets, config, receipt)
         send(ssm, instance, agent_command("enable", "--verified-version", receipt["s3"]["version_id"]))
-    elif action in ("backup-drill", "verify-latest"):
-        receipt = send(ssm, instance, agent_command("backup" if action == "backup-drill" else "latest"))
-        report = drill(s3, secrets, config, receipt)
+    elif action in ("backup-drill", "verify-latest", "live-drill"):
+        receipt = send(ssm, instance, agent_command("backup" if action != "verify-latest" else "latest"))
+        report = drill(s3, secrets, config, receipt, require_live=action == 'live-drill')
     elif action in ("disable", "status"):
         # Permit recovery cleanup after deliberate application teardown.
         if action == "disable":

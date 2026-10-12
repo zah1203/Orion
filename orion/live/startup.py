@@ -24,7 +24,7 @@ class ProtectiveSession:
             request = kwargs.get('request')
             if not isinstance(request, dict) or request.get('kind') not in ('STOP', 'EXIT'):
                 raise Refused('Reviewed startup does not authorize BUY orders')
-        elif operation not in ('snapshot', 'evidence', 'quotes', 'margin', 'funding', 'cancel'):
+        elif operation not in ('snapshot', 'evidence', 'quotes', 'market', 'margin', 'funding', 'cancel'):
             raise Refused('Unsupported protective session operation')
         return self._session.request(operation, **kwargs)
 

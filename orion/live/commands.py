@@ -60,14 +60,20 @@ class Commands:
             else:
                 from .protection import check_conflicts
                 check_conflicts(self.db)
-                if kind == 'EXIT' and self.db.execute('SELECT 1 FROM live_incidents').fetchone():
-                    raise Refused('Target blocked by unresolved incident')
             exit_price = stop_limit
             if kind == 'EXIT':
                 bound = self.db.execute('SELECT limit_price FROM exit_terms WHERE tag=?', (tag,)).fetchone()
                 if not bound:
                     raise Refused('Bound target price required')
                 exit_price = bound[0]
+                manual = self.db.execute("SELECT 1 FROM sqlite_master WHERE name='manual_requests'").fetchone()
+                manual = manual and self.db.execute('SELECT 1 FROM manual_requests WHERE exit_tag=?', (tag,)).fetchone()
+                if manual:
+                    from .manual import authorize_exit
+                    authorize_exit(self.db, entry_tag=entry_tag, quantity=row['quantity'],
+                                   limit_price=exit_price, exit_tag=tag)
+                elif self.db.execute('SELECT 1 FROM live_incidents').fetchone():
+                    raise Refused('Target blocked by unresolved incident')
             request = OrderRequest(tag=tag, symbol=body['symbol'],
                 quantity=body['quantity'] if kind == 'ENTRY' else row['quantity'],
                 lot_size=terms['lot_size'], tick=terms['tick'], kind=kind,

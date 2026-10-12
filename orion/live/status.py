@@ -56,7 +56,8 @@ def account_status(root, uid, *, now=None):
             names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             incidents = db.execute('SELECT COUNT(*) FROM live_incidents').fetchone()[0]
             pending = db.execute("SELECT COUNT(*) FROM broker_commands WHERE status!='CONFIRMED'").fetchone()[0] if 'broker_commands' in names else 0
-            fees = db.execute("SELECT COUNT(*) FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone()[0] if 'broker_fill_evidence' in names else 0
+            from .statements import unresolved
+            fees = len(unresolved(db, now=now))
             result.update(incident_count=incidents, pending_commands=pending, unverified_fee_fills=fees)
             if 'live_alerts' in names:
                 result.update(

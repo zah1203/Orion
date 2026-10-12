@@ -1,5 +1,8 @@
 # Consolidated Live release — working draft
 
+See [the current consolidated acceptance record](live-consolidated-acceptance.md)
+for the consolidated batch, manual controls, cash-only scope and outstanding gates.
+
 **Not approved for real-money deployment.** October 19, 2026 is the requested
 pilot target for the owner plus one approved account. This branch collects the
 remaining implementation in one PR; do not merge individual components as a
@@ -75,7 +78,9 @@ substitute for an integrated acceptance decision.
   own health. Missing, corrupt, misbound and recovered ledgers cannot look healthy.
 - Append-only, account-bound fee corrections with opaque statement references,
   idempotent replay, time ordering and as-of accounting. Original fill evidence is
-  unchanged. Broker statement import and verification of actual charges remain open.
+  unchanged. The consolidated batch adds complete human-reviewed statement import
+  and immutable daily cash allocations; see [Live finance](live-finance.md).
+  Real broker cash semantics and production dispatch acceptance remain open.
 - Sealed terminal-order history for daily broker-book rollover. Sealing requires
   fresh reconciled books, complete fill evidence, matching execution averages and
   fresh marks for carried exposure. Earlier-day evidence is revalidated against
@@ -108,7 +113,7 @@ is still open.
 | Kotak order transport and bounded session handling | Adapter/journal implemented; not connected to production | Fake SDK, real pinned SDK with mock HTTP, timeout/reaping and restart tests pass locally; actual broker validation pending |
 | Telegram/quote Live worker and lease/supervisor integration | Protection-monitor component and shared account lease implemented; receive-only Telegram admission implemented; bounded REST quote reader implemented; trusted market status, combined execution worker and production launcher still open | Monitor tests pass without paper mutation; full signal-to-order acceptance pending; account wrapper can hand off final exposure to exit management without releasing its lease |
 | Partial-entry protection and serialized target/trailing exits | Monitor coordinates entry remainder cancellation and confirmed partial-fill protection; target/trailing coordinator implemented; production signal policy binding and reviewed gap response still open | Late fills, rejection escalation, unknown outcomes and restart tests pass; end-to-end strategy acceptance pending |
-| Multi-day trade/order history and fee corrections | Retained terminal history, bounded current-day trade collection and fee corrections implemented; verified statement import still open | Day rollover, carried positions, absent working orders, archive conflicts and fee corrections tested locally |
+| Multi-day trade/order history and fee corrections | Retained history, bounded trade collection, fee corrections and complete human-reviewed statement import implemented | Local tests; actual private statements and broker acceptance still required |
 | Production pre-dispatch risk and account authorization | Simulator only | Same atomic checks with current policy, revocation and trusted broker funds/marks |
 | Live monitoring, incidents and controlled daily reset | Account/Owner health displays and read-only endpoints implemented; production alert delivery and reviewed incident resolution remain open | Account isolation, stale/corrupt/missing ledger tests; no reset or automatic incident clearing |
 | Production two-account execution routing | Account-specific source/policy routing implemented; real execution routing remains open | Independent sessions/ledgers, no cross-account orders, fresh approval at each boundary |
@@ -647,16 +652,20 @@ Tests exercise policy revocation, reconsent, channel/source changes, concurrent
 reservations, expiration, identity mismatch, private-process transport and no
 mutation of the ledger. All broker responses in those tests are synthetic.
 
-### What is needed from Kotak for cash authorization
+### What is needed for cash authorization
 
 The contract note is only needed to validate actual fee reconciliation. Cash
-integration separately needs the documented cash-only field or calculation for
-NSE NRML option purchases, including treatment of collateral, unsettled proceeds,
-pending withdrawals, existing order blocks and unposted charges. The SDK examples
-of `Net` and `avlCash` alone do not establish that calculation. Obtain broker
-confirmation and compare fresh read-only responses against the same account's
-funds breakdown before implementing the spending adapter. Do not substitute an
-owner-entered balance, configured capital limit, or guessed subtraction formula.
+integration needs a reviewed cash-only funding approach for NSE NRML option
+purchases, including settlement, existing order blocks and unposted charges.
+The owner has confirmed deposited cash only and no outside manual trades or
+withdrawals during operation. This makes a conservative verified-opening-cash
+allocation worth evaluating; it does not make any particular API field verified.
+The SDK examples of `Net` and `avlCash` alone do not establish spendable cash.
+Compare fresh read-only observations with the same account's funds records.
+The Account read-only check now exposes allowlisted numeric funds diagnostics
+for that comparison, with missing fields shown as unknown. A configured capital
+limit remains a ceiling, not evidence of actual funds. No broker formula needs
+to be reverse engineered by the user, and no guessed subtraction may authorize BUYs.
 
 There has been no real broker request, production deployment, Live activation or
 AWS restore verification as part of this integration. Atomic BUY authorization,

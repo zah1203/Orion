@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
 import { api } from "../lib/api";
+import LiveControls from "./LiveControls";
+import LiveFinance from "./LiveFinance";
+import LiveFees from "./LiveFees";
 
 type Policy = {
   policy_complete: boolean; enrolled: boolean; reviewed: boolean; version: number | null;
@@ -38,6 +41,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
   const healthKey = uid + ":" + healthPath;
   const health = healthResult?.key === healthKey ? healthResult.value : null;
   const [totp, setTotp] = useState("");
+  const [funds, setFunds] = useState<{ uid: string; checked_at: string; reported_funds: Record<string, string | null> } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -72,6 +76,9 @@ export default function LivePilot({ owner, uid, users = [] }: {
   return <View style={s.card}>
     <Text style={s.title}>Live pilot preparation</Text>
     <Text style={s.text}>Live trading is unavailable. Enrollment and limit review do not enable orders.</Text>
+    {!owner && <LiveControls key={uid} uid={uid} />}
+    <LiveFinance key={"finance-" + uid} uid={uid} />
+    <LiveFees key={"fees-" + uid} />
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
     {notice ? <Text style={s.text}>{notice}</Text> : null}
     <Text style={s.text}>{policy?.enrolled ? (policy.reviewed ? "Your current limits are reviewed." : "Review your pilot limits below.") : "Your account is not enrolled."}</Text>
@@ -97,10 +104,17 @@ export default function LivePilot({ owner, uid, users = [] }: {
       <TextInput accessibilityLabel="Current broker TOTP" value={totp} onChangeText={setTotp}
         secureTextEntry keyboardType="number-pad" maxLength={6} style={s.input} placeholder="Current TOTP" placeholderTextColor="#93a8bd" />
       {button("Run read-only broker check", async () => {
-        const code = totp; setTotp("");
+        const code = totp; setTotp(""); setFunds(null);
         const result = await api("/live/probe", { totp: code, confirmation: "READ ONLY CHECK" });
+        setFunds({ uid, checked_at: result.checked_at, reported_funds: result.reported_funds || {} });
         setNotice(`Read check passed: ${result.order_count} orders, ${result.nonzero_position_count} open positions. Live remains disabled.`);
       })}
+      {funds?.uid === uid && <View style={{ gap: 8 }}>
+        <Text style={s.title}>Your broker funds snapshot</Text>
+        <Text style={s.text}>Checked {new Date(funds.checked_at).toLocaleString()}. Compare this with your Kotak Funds screen. These reported values are not yet verified spendable cash; missing fields remain unknown.</Text>
+        {Object.entries(funds.reported_funds).map(([name, value]) =>
+          <Text key={name} style={s.text}>{name}: {value === null ? "Not reported" : `₹${value}`}</Text>)}
+      </View>}
     </> : null}
     {owner ? <>
       <Text style={s.title}>Configure the two-account pilot</Text>

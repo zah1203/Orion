@@ -93,7 +93,7 @@ class Observations:
                     if not binding:
                         raise Refused('Bound instrument required')
                     key = (body['segment'], binding['product'], binding['token'], body['symbol'])
-                    if entry['status'] != 'PREPARED':
+                    if entry['status'] not in ('PREPARED','ABANDONED'):
                         observed = self._match(entry, normalized, seen, key, body['quantity'], 'B')
                         if observed['order_type'] != 'L' or observed['price'] != amount(body['limit_price']) or observed['trigger']:
                             raise Refused('Entry order terms changed')

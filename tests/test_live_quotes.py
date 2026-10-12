@@ -22,6 +22,11 @@ class QuoteSDK(FakeSDK):
         return [quote()]
 
 
+class StaleQuoteSDK(QuoteSDK):
+    def quotes(self, **kwargs):
+        return [quote() | dict(lstup_time='0')]
+
+
 class QuoteTests(unittest.TestCase):
     def test_adapter_maps_exact_tokens_and_never_certifies_open_market(self):
         sdk = QuoteSDK()
@@ -42,7 +47,7 @@ class QuoteTests(unittest.TestCase):
         base = quote()
         for response in ([], [base,base], {'Error':'sensitive'}, [base | dict(exchange='mcx_fo')],
                          [base | dict(exchange_token='999')], [base | dict(display_symbol='OTHER')],
-                         [base | dict(lstup_time='0')], [base | dict(depth={})],
+                         [base | dict(depth={})],
                          [base | dict(depth=dict(buy=[dict(price='102',quantity=1)],sell=[dict(price='101',quantity=1)]))]):
             sdk = QuoteSDK()
             sdk.quotes = lambda **kwargs: copy.deepcopy(response)
@@ -58,3 +63,11 @@ class QuoteTests(unittest.TestCase):
             self.assertEqual(value['quotes'][0]['ask'],'101')
             self.assertNotIn('depth',value['quotes'][0])
             self.assertFalse(value['market_open_verified'])
+
+    def test_stale_price_does_not_disable_independent_book_reads(self):
+        with ProcessSession(CREDS, '123456', _factory=StaleQuoteSDK) as session:
+            value = session.request('quotes', instruments=REQUEST)
+            self.assertTrue(value['quotes_unavailable'])
+            self.assertEqual(value['quotes'], [])
+            self.assertFalse(value['order_submission_available'])
+            session.request('snapshot')

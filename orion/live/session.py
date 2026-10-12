@@ -61,6 +61,8 @@ def _child(pipe, factory, temp):
                 result = session.evidence()
             elif operation == 'quotes':
                 result = session.quotes(command['instruments'])
+            elif operation == 'market':
+                result = session.market()
             elif operation == 'funding':
                 result = session.funding(OrderRequest(**command['request']), command['token'])
             elif operation == 'margin':
@@ -134,7 +136,7 @@ class ProcessSession:
             raise TransportFailure('Broker session failed; reconcile pending commands') from None
 
     def request(self, operation, **arguments):
-        if operation not in ('place', 'cancel', 'snapshot', 'evidence', 'quotes', 'margin', 'funding'):
+        if operation not in ('place', 'cancel', 'snapshot', 'evidence', 'quotes', 'market', 'margin', 'funding'):
             raise ValueError('Unsupported broker operation')
         with self.lock:
             return self._exchange(dict(operation=operation, **arguments))

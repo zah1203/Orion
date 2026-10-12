@@ -105,7 +105,7 @@ class Accounting:
                 order, entry_tag, expected_side = orders[broker_id]
                 body = json.loads(self.ledger.get(entry_tag)['body'])
                 if (side != expected_side or segment != body['segment'] or symbol != body['symbol'] or
-                        order['status'] in ('PREPARED', 'DISPATCHING', 'UNKNOWN', 'REJECTED')):
+                        order['status'] in ('PREPARED', 'ABANDONED', 'DISPATCHING', 'UNKNOWN', 'REJECTED')):
                     raise Refused('Fill order mismatch')
                 if side == 'BUY' and price > amount(body['limit_price']):
                     raise Refused('Fill exceeds entry limit')
@@ -191,9 +191,8 @@ class Accounting:
         day = now.astimezone(IST).date().isoformat()
         with self.ledger.transaction(), localcontext() as context:
             context.prec = 80
-            pending = []
-            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
-                pending = self.db.execute("SELECT * FROM broker_fill_evidence WHERE fee_status='unverified'").fetchall()
+            from .statements import unresolved
+            pending = unresolved(self.db, now=now)
             if any(r['trade_day'] != day for r in pending):
                 raise Refused('Prior-day charges require reconciliation')
             tags = set()
@@ -228,9 +227,9 @@ class Accounting:
         day = now.astimezone(IST).date().isoformat()
         with self.ledger.transaction(), localcontext() as context:
             context.prec = 80
-            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='broker_fill_evidence'").fetchone():
-                if not allow_unverified and self.db.execute("SELECT 1 FROM broker_fill_evidence WHERE fee_status='unverified'").fetchone():
-                    raise Refused('Broker charges unverified; risk budget unavailable')
+            from .statements import unresolved
+            if not allow_unverified and unresolved(self.db, now=now):
+                raise Refused('Broker charges unverified; risk budget unavailable')
             fills = [dict(r) for r in self.db.execute('SELECT * FROM fill_history ORDER BY executed_at,trade_id')]
             orders = self._orders()
             if self.db.execute("SELECT 1 FROM intents WHERE status IN ('DISPATCHING','UNKNOWN')").fetchone():
