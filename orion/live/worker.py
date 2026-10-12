@@ -59,7 +59,7 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
                     state = db.execute('SELECT state FROM live_source_health WHERE id=1').fetchone() if row else None
                     source_state = state[0] if state else 'starting'
                 try:
-                    value = account.cycle_from_broker() if strategy else account.cycle()
+                    value = account.cycle_from_broker() if account.strategy else account.cycle()
                     monitor_state = value['state']
                 except Exception:
                     account.ledger.pause()

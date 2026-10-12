@@ -80,6 +80,35 @@ class ExposureWorkerTests(unittest.IsolatedAsyncioTestCase):
     setUp = strategy.StrategyTests.setUp
     tearDown = strategy.StrategyTests.tearDown
 
+    async def test_persisted_plan_handoff_switches_to_quotes_without_new_entry(self):
+        self.strategy.bind_stop_limit(self.tag, '89.95')
+        self.ledger.db.execute("DELETE FROM strategy_plans")
+        self.ledger.db.execute("""CREATE TABLE entry_exit_plans(entry_tag TEXT PRIMARY KEY,
+            source TEXT UNIQUE, source_digest TEXT, policy_version INTEGER, targets TEXT,
+            stop_limit TEXT, target_timeout INTEGER)""")
+        self.ledger.db.execute('INSERT INTO entry_exit_plans VALUES(?,?,?,?,?,?,?)',
+            (self.tag, 'fixture:1', 'synthetic', 1, '["110","120","130"]', '89.95', 10))
+        stop = asyncio.Event(); calls = []
+        original = self.session.request
+        def request(operation, **kwargs):
+            calls.append(operation)
+            if operation == 'quotes':
+                now = datetime.now(timezone.utc).isoformat()
+                if calls.count('quotes') >= 2: stop.set()
+                return dict(ucc='TESTUCC', quotes=[dict(token='123', symbol='TESTCE',
+                    segment='nse_fo', bid='105', ask='105.05', quoted_at=now, observed_at=now)])
+            return original(operation, **kwargs)
+        self.session.request = request
+        store = SimpleNamespace(user=lambda _: {}, account_dir=lambda _: self.path.parent,
+            credentials=Mock(side_effect=Refused('source unavailable')), lock=lambda _: nullcontext())
+        before = len(self.session.sdk.calls)
+        await asyncio.wait_for(serve_account(store, 'a'*32, lambda: {}, lambda: self.session,
+            stop=stop, collect_trades=False, poll_seconds=.01), timeout=3)
+        self.assertEqual(calls.count('quotes'), 2)
+        self.assertEqual(len(self.session.sdk.stops), 1)
+        self.assertFalse(any(c.get('transaction_type') == 'B' for c in self.session.sdk.calls[before:]))
+        self.assertEqual(self.ledger.db.execute('SELECT COUNT(*) FROM strategy_plans').fetchone()[0], 1)
+
     async def test_source_failure_still_places_protection_for_confirmed_exposure(self):
         self.strategy.bind_stop_limit(self.tag,'89.95')
         stop=asyncio.Event(); calls=[]

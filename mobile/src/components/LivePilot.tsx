@@ -3,7 +3,7 @@ import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
 import { api } from "../lib/api";
 
 type Policy = {
-  enrolled: boolean; reviewed: boolean; version: number | null;
+  policy_complete: boolean; enrolled: boolean; reviewed: boolean; version: number | null;
   limits: Record<string, string | number> | null;
 };
 type Health = {
@@ -23,6 +23,8 @@ const fields = [
   ["max_trade_loss", "Per-trade risk (₹)"], ["max_open_risk", "Combined open risk (₹)"],
   ["fee_reserve", "Round-trip fee reserve (₹)"], ["max_lots", "Maximum lots"],
   ["max_entries", "Maximum daily entries"],
+  ["stop_gap_ticks", "Stop-limit gap (ticks, 1–100)"],
+  ["target_timeout_seconds", "Target order timeout (seconds, 1–60)"],
 ];
 
 export default function LivePilot({ owner, uid, users = [] }: {
@@ -75,7 +77,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
     <Text style={s.text}>{policy?.enrolled ? (policy.reviewed ? "Your current limits are reviewed." : "Review your pilot limits below.") : "Your account is not enrolled."}</Text>
     {policy?.enrolled && policy.limits ? <>
       {fields.map(([key, label]) => <Text key={key} style={s.text}>{label}: {policy.limits?.[key]}</Text>)}
-      {button("Review these pilot limits", async () => {
+      {!policy.policy_complete ? <Text style={s.error}>The owner must save a complete policy including exit limits before you review it.</Text> : button("Review these pilot limits", async () => {
         await api("/live/pilot/review", { version: policy.version, confirmation: "REVIEW PILOT LIMITS" });
         setNotice("Limits reviewed. Real-money activation remains disabled.");
       })}
@@ -102,7 +104,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
     </> : null}
     {owner ? <>
       <Text style={s.title}>Configure the two-account pilot</Text>
-      <Text style={s.text}>Select an approved account and enter its own limits. Saving requires that account to review again.</Text>
+      <Text style={s.text}>Select an approved account and enter its own limits. Saving requires that account to review again. The stop-limit gap is the number of ticks below the stop trigger for a sell limit; it does not guarantee a fill. The timeout starts when a target sell is requested.</Text>
       {users.filter((u) => u.access === "approved").map((u) => <Pressable key={u.id} accessibilityRole="button"
         accessibilityState={{ selected: target === u.id }} disabled={busy}
         onPress={() => { setTarget(u.id); setValues({}); }} style={s.input}>
@@ -116,7 +118,8 @@ export default function LivePilot({ owner, uid, users = [] }: {
       </View>)}
       {button("Save selected account’s pilot limits", async () => {
         if (fields.some(([key]) => !values[key]?.trim())) throw new Error("Enter every pilot limit.");
-        const limits = { ...values, max_lots: Number(values.max_lots), max_entries: Number(values.max_entries) };
+        const limits = { ...values, max_lots: Number(values.max_lots), max_entries: Number(values.max_entries),
+          stop_gap_ticks: Number(values.stop_gap_ticks), target_timeout_seconds: Number(values.target_timeout_seconds) };
         await api("/admin/live/pilot/" + target, { limits }, "PUT");
         setNotice("Pilot limits saved. The selected account must review them."); setValues({});
       })}

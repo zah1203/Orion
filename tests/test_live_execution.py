@@ -8,7 +8,7 @@ from orion.live.ledger import Ledger, Refused
 
 LIMITS = dict(capital='30000', max_order_premium='2000', max_open_premium='5000',
               daily_loss='1000', fee_reserve='10', max_trade_loss='500', max_open_risk='800',
-              max_lots=1, max_entries=3)
+              max_lots=1, max_entries=3, stop_gap_ticks=1, target_timeout_seconds=10)
 
 
 def report(*rows):
