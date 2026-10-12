@@ -311,8 +311,11 @@ class RecoveryTests(unittest.TestCase):
                 Reconciliation(ledger,ucc)
                 ProtectionMonitor(ledger,SimpleNamespace(ucc=ucc))
                 # Synthetic persisted financial metadata stays byte-identical.
-                ledger.db.execute("INSERT INTO daily_cash_allocations VALUES('2026-10-12','2026-10-12T00:00:00+00:00',?,?,?,'1000',0,?)",
-                                  (uid,ucc,'a'*64,'b'*64))
+                model = 'opening-only' if uid == self.uid else 'nse-option-reconciled-v1'
+                ledger.db.execute("""INSERT INTO daily_cash_allocations
+                    (day,reviewed_at,account,ucc,policy_digest,opening_cash,baseline,baseline_digest,model)
+                    VALUES('2026-10-12','2026-10-12T00:00:00+00:00',?,?,?,'1000',0,?,?)""",
+                                  (uid,ucc,'a'*64,'b'*64,model))
             with patch('socket.socket',side_effect=AssertionError('Network forbidden')):
                 archive,manifest=self.backup()
                 destination=self.root/'two-live-restored'
@@ -321,7 +324,8 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(report['verified_before_sanitizing']['live_cash_reviews'],2)
             for uid in (self.uid,self.bob):
                 with sqlite3.connect(destination/'portal/accounts'/uid/'live.db') as db:
-                    self.assertEqual(db.execute('SELECT opening_cash FROM daily_cash_allocations').fetchone()[0],'1000')
+                    self.assertEqual(db.execute('SELECT opening_cash,model FROM daily_cash_allocations').fetchone(),
+                                     ('1000', 'opening-only' if uid == self.uid else 'nse-option-reconciled-v1'))
                 with self.assertRaises(Refused):Ledger(destination/'portal/accounts'/uid/'live.db',uid)
                 self.assertTrue(pilot.status(uid)['reviewed'])
             self.assertEqual(self.engine.state()['positions'],self.positions)
