@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from .alerts import health_event
+from .authorization import revoke
 from .ledger import Refused
 from .monitor import AccountMonitor
 from .source import receive_signals, telegram_client
@@ -28,7 +29,7 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
     if stop.is_set():
         return
     with _monitor_factory(store,uid,session_factory,strategy=strategy,collect_trades=collect_trades) as account:
-        account.ledger.pause()
+        revoke(account.ledger)
         db = account.ledger.db
         db.execute('''CREATE TABLE IF NOT EXISTS live_worker_health(
             id INTEGER PRIMARY KEY CHECK(id=1), checked_at TEXT NOT NULL,
@@ -53,7 +54,7 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
                 if source.done():
                     failed = source.cancelled() or source.exception() is not None
                     source_state = 'disconnected' if failed else 'stopped'
-                    account.ledger.pause()
+                    revoke(account.ledger)
                     if not source_failure_recorded:
                         health_event(account.ledger,'review-required',0)
                         source_failure_recorded = True
@@ -65,7 +66,7 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
                     value = account.cycle_from_broker() if getattr(account, 'needs_quotes', account.strategy) else account.cycle()
                     monitor_state = value['state']
                 except Exception:
-                    account.ledger.pause()
+                    revoke(account.ledger)
                     monitor_state = 'review-required'
                     # No reauthentication/replacement session. The existing
                     # adapter itself refuses calls after a transport failure.
@@ -78,7 +79,7 @@ async def serve_account(store, uid, master_provider, session_factory, *, stop,
                 except asyncio.TimeoutError:
                     pass
         finally:
-            account.ledger.pause()
+            revoke(account.ledger)
             source_stop.set()
             try:
                 await asyncio.wait_for(source,timeout=15)

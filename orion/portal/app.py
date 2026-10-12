@@ -98,7 +98,7 @@ class LiveWorkerStop(Strict):
 
 class LiveEntryReview(Strict):
     policy_version: int = Field(strict=True, gt=0)
-    confirmation: Literal["AUTHORIZE ONE LIVE ENTRY TODAY WITH MY REVIEWED LIMITS"]
+    confirmation: Literal["AUTHORIZE AUTOMATIC LIVE ENTRIES THIS INDIA DAY WITH MY REVIEWED LIMITS"]
 
 
 class LiveManual(Strict):

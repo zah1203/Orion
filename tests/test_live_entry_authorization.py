@@ -46,10 +46,11 @@ class EntryPermissionTests(unittest.TestCase):
                 result = c.submit(CHANNEL+':1')
                 self.assertFalse(result['fill_confirmed'])
                 self.assertEqual(raw.operations.count('place'), 1)
-                self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0], 2)
+                self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0], 1)
                 self.assertTrue(c.authority.allowed())
                 c.db.execute('UPDATE execution_attempts SET at=?', ((datetime.now(timezone.utc)-timedelta(seconds=31)).isoformat(),))
                 self.assertFalse(c.authority.allowed())
+                self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0], 1)
 
     def test_pause_revokes_permission(self):
         with self.account() as a:
@@ -80,3 +81,81 @@ class EntryPermissionTests(unittest.TestCase):
                 self.assertEqual(worker.cycle(), 'refused')
             self.assertNotIn('private-secret', str(list(worker.db.iterdump())))
             self.assertEqual(worker.cycle(), 'idle')
+
+    def test_legacy_permission_is_never_upgraded(self):
+        with self.account() as a:
+            c = self.coordinator(a)
+            c.db.execute("UPDATE entry_permission SET scope='one-entry'")
+            with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
+                self.assertFalse(c.authority.allowed())
+                with self.assertRaises(Refused): c.authority.resume_when_flat()
+            self.assertEqual(c.db.execute('SELECT active FROM entry_permission').fetchone()[0], 0)
+
+    def test_flat_internal_pause_resumes_same_grant_but_revocation_does_not(self):
+        with self.account() as a:
+            c = self.coordinator(a)
+            nonce = c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0]
+            a.ledger.pause()
+            with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
+                self.assertFalse(c.authority.allowed())
+                c.authority.resume_when_flat()
+                self.assertTrue(c.authority.allowed())
+                self.assertEqual(c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0], nonce)
+                revoke(a.ledger)
+                with self.assertRaises(Refused): c.authority.resume_when_flat()
+
+    def test_stale_source_cannot_resume_session(self):
+        with self.account() as a:
+            c = self.coordinator(a)
+            a.ledger.pause()
+            c.db.execute("UPDATE live_source_health SET checked_at='2000-01-01T00:00:00+00:00'")
+            with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
+                with self.assertRaises(Refused): c.authority.resume_when_flat()
+            self.assertEqual(c.db.execute('SELECT paused FROM control').fetchone()[0], 1)
+
+    def test_schema_migration_preserves_legacy_scope(self):
+        import sqlite3
+        from orion.live.authorization import install
+        db = sqlite3.connect(':memory:')
+        try:
+            db.execute('CREATE TABLE entry_permission(id INTEGER PRIMARY KEY, nonce TEXT, worker_session TEXT, day TEXT, policy_digest TEXT, active INTEGER, reviewed_at TEXT)')
+            db.execute("INSERT INTO entry_permission VALUES(1,'n','s','d','p',1,'t')")
+            install(db)
+            install(db)
+            self.assertEqual(db.execute('SELECT active,scope FROM entry_permission').fetchone(), (1,'one-entry'))
+        finally:
+            db.close()
+
+    def test_two_sequential_entries_share_grant_after_confirmed_flat_cancel(self):
+        from test_live_execution import report
+        from orion.live.reconciliation import Reconciliation
+        self.message()
+        with self.account() as a:
+            c = self.coordinator(a)
+            nonce = c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0]
+            with patch('orion.live.status.release_status', return_value={'order_submission_available': True}):
+                c.submit(CHANNEL+':1')
+                tag = c.db.execute('SELECT tag FROM intents').fetchone()[0]
+                a.ledger.reconcile(tag, account=a.uid, broker_id='broker1', symbol='NIFTYTESTCE',
+                    quantity=10, status='CANCELLED', filled=0, average='0')
+                c.db.execute("UPDATE broker_commands SET status='CONFIRMED'")
+                a.ledger.pause()
+                now = datetime.now(timezone.utc)
+                order = dict(actId='TESTOWNER', nOrdNo='broker1', exSeg='nse_fo', prod='NRML',
+                    tok='123', trdSym='NIFTYTESTCE', qty=10, fldQty=0, ordSt='cancelled',
+                    trnsTp='B', avgPrc='0', prc='101', trgPrc='0', prcTp='L')
+                Reconciliation(a.ledger, 'TESTOWNER').compare(report(order), report(),
+                    started_at=now, completed_at=now, complete=True)
+                c.authority.resume_when_flat()
+                self.message(message_id=2)
+                original = self.session.request
+                def second(operation, **kwargs):
+                    if operation == 'place':
+                        self.session.operations.append('place')
+                        return {'broker_id':'broker2'}
+                    return original(operation, **kwargs)
+                self.session.request = second
+                c.submit(CHANNEL+':2')
+                self.assertEqual(self.session.operations.count('place'), 2)
+                self.assertEqual(c.db.execute('SELECT nonce FROM entry_permission').fetchone()[0], nonce)
+                self.assertEqual(c.db.execute('SELECT COUNT(DISTINCT nonce) FROM entry_dispatch_permission').fetchone()[0], 1)
