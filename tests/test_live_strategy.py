@@ -103,16 +103,53 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(self.cycle('109', age=31)['action'], 'strategy-protection-requested')
         self.assertTrue(all(r['prcTp'] == 'SL' for r in self.session.sdk.stops))
 
-    def test_target_timeout_cancels_once_then_protects_without_retry(self):
+    def test_target_timeout_reprotects_and_rearms_after_retreat(self):
         target = self.to_target()
         self.ledger.db.execute('UPDATE strategy_plans SET requested_at=?', ((self.now-timedelta(seconds=11)).isoformat(),))
         self.assertEqual(self.cycle('111')['action'], 'strategy-cancel-requested')
         self.assertEqual(self.cycle('111')['action'], 'cancel-confirmation-pending')
         target['ordSt'] = 'cancelled'
-        self.assertEqual(self.cycle('111')['action'], 'target-ended-before-completion')
         self.assertEqual(self.cycle('111')['action'], 'strategy-protection-requested')
-        self.assertEqual(self.cycle('111')['action'], 'strategy-halted')
+        self.assertEqual(self.cycle('111')['action'], 'target-waiting-for-rearm')
+        self.assertEqual(self.cycle('109')['action'], 'target-rearmed')
+        self.assertFalse(self.ledger.db.execute('SELECT 1 FROM live_incidents').fetchone())
+        self.assertEqual(self.cycle('111')['action'], 'target-reached')
         self.assertEqual(sum(r['prcTp'] == 'L' for r in self.session.sdk.stops), 1)
+
+    def test_partial_target_recovery_survives_restart_and_only_sells_remainder(self):
+        self.ledger.db.execute("UPDATE strategy_plans SET quantities='[2,0,1]'")
+        target = self.to_target()
+        self.ledger.db.execute('UPDATE strategy_plans SET requested_at=?', ((self.now-timedelta(seconds=11)).isoformat(),))
+        self.assertEqual(self.cycle('111')['action'], 'strategy-cancel-requested')
+        target.update(ordSt='cancelled', fldQty=1, avgPrc='110')
+        self.assertEqual(self.cycle('111')['action'], 'strategy-protection-requested')
+        self.assertEqual(self.session.sdk.stops[-1]['qty'], 2)
+        self.ledger.close()
+        self.ledger = Ledger(self.path, 'a'*32)
+        self.strategy = ExitStrategy(self.ledger, self.session)
+        self.assertEqual(self.cycle('109', age=31)['action'], 'target-waiting-for-rearm')
+        self.assertEqual(self.cycle('109')['action'], 'target-rearmed')
+        self.assertEqual(self.cycle('111')['action'], 'target-reached')
+        self.assertEqual(self.cycle('111')['action'], 'strategy-cancel-requested')
+        self.session.sdk.stops[-1]['ordSt'] = 'cancelled'
+        self.assertEqual(self.cycle('111')['action'], 'target-requested')
+        self.assertEqual(self.session.sdk.stops[-1]['qty'], 1)
+        self.assertEqual(self.ledger.db.execute('SELECT SUM(filled) FROM strategy_target_recoveries').fetchone()[0], 1)
+
+    def test_cancel_fill_race_completes_stage_without_reselling_it(self):
+        target = self.to_target()
+        self.ledger.db.execute('UPDATE strategy_plans SET requested_at=?', ((self.now-timedelta(seconds=11)).isoformat(),))
+        self.assertEqual(self.cycle('111')['action'], 'strategy-cancel-requested')
+        target.update(ordSt='cancelled', fldQty=1, avgPrc='110')
+        self.cycle('111')
+        self.assertEqual(self.ledger.db.execute('SELECT stage FROM strategy_plans').fetchone()[0], 1)
+        self.assertEqual(sum(r['prcTp'] == 'L' for r in self.session.sdk.stops), 1)
+
+    def test_unsolicited_target_cancellation_does_not_auto_rearm(self):
+        target = self.to_target()
+        target['ordSt'] = 'cancelled'
+        self.assertEqual(self.cycle('111')['state'], 'review-required')
+        self.assertFalse(self.ledger.db.execute('SELECT 1 FROM strategy_target_recoveries').fetchone())
 
     def test_restart_retains_pending_cancellation_and_never_duplicates(self):
         self.cycle(); self.cycle('111'); self.cycle('111')
