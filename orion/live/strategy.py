@@ -2,7 +2,7 @@
 
 No entry authority or production launcher. Each cycle reconciles before issuing
 at most one command. Target limits and stop gaps are explicit; no market orders,
-OCO assumption, cancel-ack capacity release, price chasing or automatic retry.
+OCO assumption, cancel-ack capacity release, price chasing or uncertain resend.
 """
 from datetime import datetime, timezone
 import json
@@ -25,6 +25,9 @@ class ExitStrategy(ProtectionMonitor):
                 stop_gap TEXT NOT NULL, target_timeout INTEGER NOT NULL,
                 stage INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT 'WATCH',
                 active_exit TEXT, requested_at TEXT);
+            CREATE TABLE IF NOT EXISTS strategy_target_recoveries(
+                tag TEXT PRIMARY KEY, entry_tag TEXT NOT NULL, stage INTEGER NOT NULL,
+                filled INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS strategy_cancellations(
                 tag TEXT PRIMARY KEY, entry_tag TEXT NOT NULL);
         ''')
@@ -166,6 +169,25 @@ class ExitStrategy(ProtectionMonitor):
                         with self.ledger.transaction():
                             self.db.execute("UPDATE strategy_plans SET stage=stage+1,phase='WATCH',active_exit=NULL,requested_at=NULL WHERE entry_tag=?", (entry['tag'],))
                         return self._health('awaiting-broker', 'target-fill-confirmed')
+                    if target['status'] == 'CANCELLED' and self.db.execute(
+                            "SELECT 1 FROM broker_commands WHERE kind='EXIT' AND tag=? AND operation='cancel' AND status='CONFIRMED'",
+                            (target['tag'],)).fetchone():
+                        # Only our confirmed cancellation can recover automatically.
+                        # Retain original allocations; journal fills once per target.
+                        if target['filled'] % terms['lot_size']:
+                            return self._health('review-required', 'odd-lot-exposure')
+                        with self.ledger.transaction():
+                            self.db.execute('INSERT OR IGNORE INTO strategy_target_recoveries VALUES(?,?,?,?)',
+                                            (target['tag'], entry['tag'], plan['stage'], target['filled']))
+                            sold = self.db.execute('SELECT SUM(filled) FROM strategy_target_recoveries WHERE entry_tag=? AND stage=?',
+                                                   (entry['tag'], plan['stage'])).fetchone()[0]
+                            allocation = json.loads(plan['quantities'])[plan['stage']]
+                            if sold > allocation:
+                                raise Refused('Recovered fills exceed target allocation')
+                            self.db.execute("UPDATE strategy_plans SET stage=stage+?,phase='RECOVER',active_exit=NULL,requested_at=NULL WHERE entry_tag=?",
+                                            (int(sold == allocation), entry['tag']))
+                        action = self._protect(entry, plan, terms, stops)
+                        return action or self._health('awaiting-broker', 'target-reprotecting')
                     if target['status'] in ('CANCELLED','REJECTED'):
                         with self.ledger.transaction():
                             self.db.execute("UPDATE strategy_plans SET phase='HALTED',active_exit=NULL WHERE entry_tag=?", (entry['tag'],))
@@ -178,6 +200,26 @@ class ExitStrategy(ProtectionMonitor):
                 if stage >= 3:
                     return self._health('review-required', 'unexpected-residual-exposure')
                 target_price = amount(json.loads(plan['targets'])[stage])
+                recovered = self.db.execute('SELECT COALESCE(SUM(filled),0) FROM strategy_target_recoveries WHERE entry_tag=? AND stage=?',
+                                            (entry['tag'], stage)).fetchone()[0]
+                target_remaining = json.loads(plan['quantities'])[stage] - recovered
+                if target_remaining < 0:
+                    raise Refused('Recovered fills exceed target allocation')
+                if plan['phase'] == 'RECOVER':
+                    action = self._protect(entry, plan, terms, stops)
+                    if action:
+                        return action
+                    remaining = self.protection._remaining(entry['tag'])
+                    coverage = sum(r['quantity']-r['filled'] for r in stops
+                                   if r['status'] in ('OPEN','PARTIAL') and amount(r['trigger']) == self._stop(entry, plan, terms))
+                    if coverage != remaining:
+                        return self._health('awaiting-broker', 'target-reprotecting')
+                    # Require a fresh retreat before rearming, avoiding repeated
+                    # cancel/recreate cycles at an unchanged target price.
+                    if fresh and price < target_price:
+                        self.db.execute("UPDATE strategy_plans SET phase='WATCH' WHERE entry_tag=?", (entry['tag'],))
+                        return self._health('awaiting-broker', 'target-rearmed')
+                    return self._health('awaiting-broker', 'target-waiting-for-rearm')
                 if plan['phase'] == 'CANCEL':
                     # Revalidate before every cancellation, not only before the
                     # target send. Preserve remaining stops if the quote is lost.
@@ -188,7 +230,7 @@ class ExitStrategy(ProtectionMonitor):
                     for row in stops:
                         if row['status'] in ('OPEN','PARTIAL'):
                             return self._cancel('STOP', row)
-                    quantity = min(json.loads(plan['quantities'])[stage], self.protection._unreserved(entry['tag']))
+                    quantity = min(target_remaining, self.protection._unreserved(entry['tag']))
                     if not quantity or quantity % terms['lot_size']:
                         self.protection.incident('strategy-requires-review')
                         return self._health('review-required', 'target-capacity-changed')

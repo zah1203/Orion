@@ -78,8 +78,8 @@ The UI reloads the selected account's saved values and clearly labels them as
 not applied. The separate advanced policy editor retains strict validation.
 
 No extra premium cap, fee reserve, combined risk, stop gap or timeout is guessed.
-Automatic derivation and execution-policy review remain implementation work before
-these preferences can drive trading. Maximum lots and entries are ceilings;
+The simple-policy action derives capital and combined-risk caps as described below;
+fee and exit assumptions remain explicit. Maximum lots and entries are ceilings;
 available cash and remaining daily risk can still reduce or block a trade.
 
 ## Reconciled NSE option principal reuse
@@ -147,3 +147,30 @@ nor enables the release gate. Fee reserve remains an estimate, not verified char
 
 Validation is local and synthetic. Broker acceptance, account enrollment/review,
 Live recovery validation and production deployment remain outstanding.
+
+
+## Attended pilot and confirmed target-timeout recovery
+
+The first Live sessions are attended. Before ending a session, pause new entries,
+inspect pending orders and positions in Kotak, and confirm any requested exits have
+filled. Pausing does not close positions. Do not stop position management while
+exposure remains. The agreed fee reserve is a provisional INR 250 per trade,
+covering entry and all exits, to reconcile against actual charges after day one.
+This document does not apply account settings. Proposed 20-tick stop gap and
+30-second timeout still need account review; the last approved maximum is five
+lots, with a later discussion of one-to-three lots not yet resolving the cap.
+
+An Orion-requested target cancellation may recover automatically only after the
+broker journal confirms cancellation. Reconciled fills are persisted per target
+and stage, so later targets sell only the remaining stage allocation, including
+after restart. Stop capacity is restored first. Fresh quotes must retreat below
+the target before rearming, preventing repeated sends at an unchanged price.
+A later target crossing starts a new journalled order; the old order is never
+resent. New entries remain blocked during recovery. Unexpected cancellations,
+rejections, odd-lot exposure, uncertain commands and stop-limit gaps retain their
+existing blocking behaviour. No market-exit fallback is introduced.
+
+Release availability remains false. Deployment is not broker acceptance. Before
+changing it, complete account policy review, broker contract/egress and cash
+checks, notification acceptance and an AWS Live-ledger restore drill. Initial
+real-order acceptance must be attended; simulated tests cannot certify fills.
