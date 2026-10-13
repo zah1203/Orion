@@ -28,9 +28,9 @@ class StagedReleaseTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def prepare(self):
+    def prepare(self, **kwargs):
         prepare_release(self.release, self.archive, run=self.run,
-                        current=self.current, override=self.override)
+                        current=self.current, override=self.override, **kwargs)
 
     def staged(self):
         self.prepare()
@@ -94,4 +94,34 @@ class StagedReleaseTests(unittest.TestCase):
             tar.add(self.source/'app.py', arcname='../escape.py')
         with self.assertRaises(SystemExit): self.prepare()
         self.assertFalse(self.release.exists())
+        self.run.assert_not_called()
+
+    def test_full_promotion_reuses_verified_portal_tree_without_writing(self):
+        self.staged()
+        body = '# Managed by Orion portal-only deployment\n[Service]\nWorkingDirectory=' + str(self.release)
+        self.override.write_text(body)
+        before = (self.release/'app.py').stat().st_mtime_ns
+        self.prepare(promote_portal=True)
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(self.run.call_args.args[0][1:], ['-m','unittest','discover','-s','tests'])
+        self.assertEqual((self.release/'app.py').stat().st_mtime_ns, before)
+        self.assertEqual(self.override.read_text(), body)
+        self.assertFalse(self.current.exists())
+        self.run.reset_mock()
+        (self.release/'app.py').write_text('tampered')
+        with self.assertRaises(SystemExit): self.prepare(promote_portal=True)
+        self.run.assert_not_called()
+
+    def test_promotion_still_rejects_active_workers_unmanaged_and_linked_overrides(self):
+        self.staged()
+        self.override.write_text('WorkingDirectory=' + str(self.release))
+        with self.assertRaises(SystemExit): self.prepare(promote_portal=True)
+        self.override.unlink()
+        other = self.root/'other'
+        other.write_text('# Managed by Orion portal-only deployment\n' + str(self.release))
+        self.override.symlink_to(other)
+        with self.assertRaises(SystemExit): self.prepare(promote_portal=True)
+        self.override.unlink()
+        self.current.symlink_to(self.release)
+        with self.assertRaises(SystemExit): self.prepare(promote_portal=True)
         self.run.assert_not_called()
