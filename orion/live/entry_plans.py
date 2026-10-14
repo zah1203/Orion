@@ -70,6 +70,11 @@ class EntryPlans:
                 len(targets) != 3 or not stop < price < targets[0] < targets[1] < targets[2] or
                 not tick or any(v % tick for v in [price, stop, *targets])):
             raise Refused('Entry does not match admitted signal')
+        if policy['limits'].get('stop_fallback', False):
+            if stop-50*tick <= 0:
+                raise Refused('Fallback stop limit must stay positive')
+            from .stop_fallback import bind
+            bind(self.ledger, entry_tag)
         stop_limit = stop - tick * policy['limits']['stop_gap_ticks']
         if stop_limit <= 0:
             raise Refused('Reviewed stop gap exceeds trigger')

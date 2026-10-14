@@ -9,7 +9,7 @@ import LiveEntries from "./LiveEntries";
 
 type Policy = {
   policy_complete: boolean; enrolled: boolean; reviewed: boolean; version: number | null;
-  limits: Record<string, string | number> | null;
+  limits: Record<string, string | number | boolean> | null;
 };
 type Health = {
   account: { state: string; checked_at: string | null; exposure: number | null;
@@ -96,6 +96,13 @@ export default function LivePilot({ owner, uid, users = [] }: {
     return <Pressable accessibilityRole="button" disabled={busy} style={[s.button, busy && { opacity: 0.4 }]}
       onPress={() => run(action)}><Text style={s.buttonText}>{label}</Text></Pressable>;
   }
+  const fallbackSetting = <Pressable accessibilityRole="checkbox"
+    accessibilityState={{ checked: values.stop_fallback === "true", disabled: busy || !preferencesLoaded }}
+    disabled={busy || !preferencesLoaded}
+    onPress={() => setValues((old) => ({ ...old, stop_fallback: old.stop_fallback === "true" ? "false" : "true" }))}>
+    <Text style={s.text}>{values.stop_fallback === "true" ? "☑" : "☐"} Allow one stop-limit widening: 20 → 50 ticks</Text>
+    <Text style={s.text}>Requires a 20-tick initial gap. After Orion first confirms a triggered stop, wait 5 seconds, then modify that same order once if still unfilled. At 30 seconds, keep it working and require review. Partial fills retain only the unsold exposure. No fill is guaranteed. This is separate from target timeout.</Text>
+  </Pressable>;
   return <View style={s.card}>
     <Text style={s.title}>Live pilot preparation</Text>
     <Text style={s.text}>Live trading is unavailable. Enrollment and limit review do not enable orders.</Text>
@@ -108,7 +115,8 @@ export default function LivePilot({ owner, uid, users = [] }: {
     {notice ? <Text style={s.text}>{notice}</Text> : null}
     <Text style={s.text}>{policy?.enrolled ? (policy.reviewed ? "Your current limits are reviewed." : "Review your pilot limits below.") : "Your account is not enrolled."}</Text>
     {policy?.enrolled && policy.limits ? <>
-      {fields.map(([key, label]) => <Text key={key} style={s.text}>{label}: {policy.limits?.[key]}</Text>)}
+      {fields.map(([key, label]) => <Text key={key} style={s.text}>{label}: {String(policy.limits?.[key] ?? "")}</Text>)}
+      <Text style={s.text}>Stop fallback: {policy.limits.stop_fallback ? "20 → 50 ticks once after 5 seconds from the first confirmed trigger; 30-second deadline, then keep the order working and require review." : "Off"}</Text>
       {!policy.policy_complete ? <Text style={s.error}>The owner must save a complete policy including exit limits before you review it.</Text> : button("Review these pilot limits", async () => {
         await api("/live/pilot/review", { version: policy.version, confirmation: "REVIEW PILOT LIMITS" });
         setNotice("Limits reviewed. Real-money activation remains disabled.");
@@ -160,6 +168,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
           keyboardType="decimal-pad" editable={!busy && preferencesLoaded} style={s.input}
           onChangeText={(value) => setValues((old) => ({ ...old, [key]: value }))} />
       </View>)}
+      {advanced && fallbackSetting}
       {button(advanced ? "Save selected account’s execution policy" : "Save five Live risk preferences", async () => {
         if (!preferencesLoaded) throw new Error("Wait for saved preferences to load.");
         if (!advanced) {
@@ -172,7 +181,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
         }
         if (fields.some(([key]) => !values[key]?.trim())) throw new Error("Enter every pilot limit.");
         const limits = { ...values, max_lots: Number(values.max_lots), max_entries: Number(values.max_entries),
-          stop_gap_ticks: Number(values.stop_gap_ticks), target_timeout_seconds: Number(values.target_timeout_seconds) };
+          stop_gap_ticks: Number(values.stop_gap_ticks), target_timeout_seconds: Number(values.target_timeout_seconds), stop_fallback: values.stop_fallback === "true" };
         await api("/admin/live/pilot/" + target, { limits }, "PUT");
         setNotice("Pilot limits saved. The selected account must review them."); setValues({});
       })}
@@ -193,6 +202,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
             editable={!busy && preferencesLoaded} style={s.input}
             onChangeText={(value) => setValues((old) => ({ ...old, [key]: value }))} />
         </View>)}
+        {executionExpanded && fallbackSetting}
         {button("Apply risk settings", async () => {
           if (!preferencesLoaded) throw new Error("Wait for saved preferences to load.");
           const keys = [...preferenceKeys, "fee_reserve", "stop_gap_ticks", "target_timeout_seconds"];
@@ -201,7 +211,7 @@ export default function LivePilot({ owner, uid, users = [] }: {
             throw new Error("Complete the five values and one-time fee and exit setup.");
           }
           const counts = ["max_lots", "max_entries", "stop_gap_ticks", "target_timeout_seconds"];
-          const limits = Object.fromEntries(keys.map((key) => [key, counts.includes(key) ? Number(values[key]) : values[key].trim()]));
+          const limits = { ...Object.fromEntries(keys.map((key) => [key, counts.includes(key) ? Number(values[key]) : values[key].trim()])), stop_fallback: values.stop_fallback === "true" };
           await api("/admin/live/simple-policy/" + target, { limits }, "PUT");
           setNotice("Derived policy saved. The selected account must review it. Live remains locked.");
         })}

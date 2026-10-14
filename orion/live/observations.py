@@ -4,7 +4,7 @@ An order ID must have been durably bound by the placement acknowledgement. Tags
 are never used to guess an unknown order's identity. Missing history and external
 orders block reconciliation rather than being silently imported or discarded.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 
 from .ledger import Refused, amount
@@ -21,6 +21,8 @@ class Observations:
         self.reconciliation = Reconciliation(ledger, ucc)
         self.protection = Protection(ledger)
         self.ucc = ucc
+        self.db.execute('''CREATE TABLE IF NOT EXISTS stop_observations(
+            tag TEXT PRIMARY KEY, state TEXT NOT NULL, observed_at TEXT NOT NULL)''')
 
     def ingest_evidence(self, snapshot):
         """Commit matching order, position and fill evidence as one transaction.
@@ -55,9 +57,12 @@ class Observations:
             states = dict(OPEN='open', PARTIAL='open', FILLED='complete', CANCELLED='cancelled', REJECTED='rejected')
             for row in snapshot['orders']:
                 segment, product, token, symbol = row['instrument']
+                if (row['order_type'] == 'SL' and row['status'] in ('OPEN', 'PARTIAL') and
+                        row.get('trigger_state') not in ('pending', 'triggered')):
+                    raise ValueError('Explicit stop trigger state required')
                 orders.append(dict(actId=self.ucc, nOrdNo=row['broker_id'], exSeg=segment,
                     prod=product, tok=token, trdSym=symbol, qty=row['quantity'], fldQty=row['filled'],
-                    ordSt=states[row['status']], trnsTp=row['side'], avgPrc=row['average'],
+                    ordSt=('trigger pending' if row.get('trigger_state') == 'pending' else states[row['status']]), trnsTp=row['side'], avgPrc=row['average'],
                     prc=row['price'], trgPrc=row['trigger'], prcTp=row['order_type']))
             for row in snapshot['positions']:
                 segment, product, token, symbol = row['instrument']
@@ -110,6 +115,15 @@ class Observations:
                         if not command:
                             raise Refused('Protective command terms required')
                         requested = json.loads(command['request'])['request']
+                        modified = self.db.execute("SELECT request,status FROM broker_commands WHERE kind='STOP' AND tag=? AND operation='modify'", (exit_row['tag'],)).fetchone()
+                        if modified:
+                            proposed = json.loads(modified['request'])['request']
+                            if observed['price'] == amount(proposed['price']):
+                                requested = proposed
+                                if modified['status'] == 'ACKNOWLEDGED':
+                                    self.db.execute("UPDATE broker_commands SET status='CONFIRMED' WHERE kind='STOP' AND tag=? AND operation='modify'", (exit_row['tag'],))
+                            elif modified['status'] == 'CONFIRMED':
+                                raise Refused('Confirmed modified stop reverted')
                         if (observed['order_type'] != ('L' if kind == 'EXIT' else 'SL') or observed['trigger'] != amount(exit_row['trigger']) or
                                 observed['price'] != amount(requested['price'])):
                             raise Refused('Protective order terms changed')
@@ -119,6 +133,15 @@ class Observations:
                             broker_id=exit_row['broker_id'], symbol=body['symbol'], segment=body['segment'],
                             side='SELL', quantity=exit_row['quantity'], status=observed['status'], filled=observed['filled'])
                         self._confirm(kind, exit_row['tag'])
+                        if kind == 'STOP':
+                            self.db.execute('INSERT OR REPLACE INTO stop_observations VALUES(?,?,?)',
+                                (exit_row['tag'], observed['trigger_state'], completed_at.isoformat()))
+                            if (observed['trigger_state'] == 'triggered' and self.db.execute(
+                                    "SELECT 1 FROM sqlite_master WHERE name='stop_fallback_policy'").fetchone() and
+                                    self.db.execute('SELECT 1 FROM stop_fallback_policy WHERE entry_tag=?', (entry['tag'],)).fetchone()):
+                                self.db.execute('INSERT OR IGNORE INTO stop_fallback_state VALUES(?,?,?)',
+                                    (exit_row['tag'], completed_at.isoformat(),
+                                     (completed_at+timedelta(seconds=30)).isoformat()))
                 if seen != set(normalized):
                     raise Refused('External broker orders require review')
                 result = self.reconciliation.compare(orders, positions, started_at=started_at,
@@ -146,6 +169,8 @@ class Observations:
 
     def _confirm(self, kind, tag):
         for command in self.db.execute('SELECT operation FROM broker_commands WHERE kind=? AND tag=?', (kind, tag)).fetchall():
+            if command['operation'] == 'modify':
+                continue  # ACK alone or unchanged terms never confirms modification.
             if command['operation'] == 'cancel':
                 _, row = self.commands._row(kind, tag)
                 if row['status'] not in ('FILLED', 'CANCELLED', 'REJECTED'):

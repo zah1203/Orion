@@ -149,6 +149,10 @@ class ExitStrategy(ProtectionMonitor):
                     return self._health('review-required', 'rejected-stop')
                 if self.db.execute("SELECT 1 FROM live_incidents WHERE code='unprotected-exposure'").fetchone():
                     return self._health('review-required', 'unexpected-exit-cancellation')
+                from .stop_fallback import cycle as recover_stop
+                recovery = recover_stop(self, entry, stops, now)
+                if recovery is not None:
+                    return recovery
                 quote = marks.get(entry['tag'])
                 fresh = False
                 if isinstance(quote, tuple) and len(quote) == 2:

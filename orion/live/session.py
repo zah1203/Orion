@@ -4,6 +4,7 @@ Credentials and responses use an anonymous pipe, never argv/environment/files.
 Timeout/cancellation kills and reaps the child; callers must retain UNKNOWN
 dispatch state. A new session is never an instruction to resend an old intent.
 """
+from datetime import datetime, timezone
 from decimal import Decimal
 import json
 import logging
@@ -53,6 +54,8 @@ def _child(pipe, factory, temp):
             operation = command['operation']
             if operation == 'place':
                 result = {'broker_id': session.place(OrderRequest(**command['request']))}
+            elif operation == 'modify':
+                result = {'broker_id': session.modify(command['broker_id'], OrderRequest(**command['request']), command['deadline'])}
             elif operation == 'cancel':
                 result = {'broker_id': session.cancel(command['broker_id'])}
             elif operation == 'snapshot':
@@ -111,6 +114,15 @@ class ProcessSession:
         data = _encode(command)
         if len(data) > 16384:
             raise TransportFailure('Broker command too large')
+        timeout = self.timeout
+        if command.get('operation') == 'modify':
+            try:
+                remaining = (datetime.fromisoformat(command['deadline'])-datetime.now(timezone.utc)).total_seconds()
+                if not 0 < remaining <= 30:
+                    raise ValueError
+                timeout = min(timeout, remaining)
+            except (ValueError, TypeError, KeyError):
+                raise TransportFailure('Stop modification deadline expired or invalid') from None
         outcome = []
         def exchange():
             try:
@@ -121,7 +133,7 @@ class ProcessSession:
         io = threading.Thread(target=exchange, daemon=True)
         try:
             io.start()
-            io.join(self.timeout)
+            io.join(timeout)
             if io.is_alive() or not outcome or outcome[0] is None:
                 raise TimeoutError
             response = json.loads(outcome[0])
@@ -136,7 +148,7 @@ class ProcessSession:
             raise TransportFailure('Broker session failed; reconcile pending commands') from None
 
     def request(self, operation, **arguments):
-        if operation not in ('place', 'cancel', 'snapshot', 'evidence', 'quotes', 'market', 'margin', 'funding'):
+        if operation not in ('place', 'modify', 'cancel', 'snapshot', 'evidence', 'quotes', 'market', 'margin', 'funding'):
             raise ValueError('Unsupported broker operation')
         with self.lock:
             return self._exchange(dict(operation=operation, **arguments))

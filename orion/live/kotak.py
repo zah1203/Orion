@@ -131,6 +131,25 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker cancellation unknown; reconciliation required') from None
 
+    def modify(self, oid, request, deadline):
+        """Same broker ID and total quantity; never cancel/recreate or retry."""
+        self._check()
+        text_field(oid)
+        params = request.parameters()
+        if request.kind != 'STOP':
+            raise Refused('Only protective stop modification supported')
+        end = datetime.fromisoformat(deadline)
+        if end.tzinfo is None or not 0 < (end-datetime.now(timezone.utc)).total_seconds() <= 30:
+            raise Refused('Stop modification deadline expired')
+        try:
+            return acknowledgement(self.client.modify_order(order_id=oid,
+                price=params['price'], order_type='SL', quantity=params['quantity'],
+                validity='DAY', trigger_price=params['trigger_price'],
+                disclosed_quantity='0', amo='NO'), expected=oid)
+        except Exception:
+            self.closed = True
+            raise TransportFailure('Broker modification unknown; reconciliation required') from None
+
     def snapshot(self):
         """Sanitized current books, not proof of historical completeness or cash."""
         self._check()

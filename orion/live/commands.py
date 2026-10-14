@@ -84,6 +84,18 @@ class Commands:
             self._record(kind, tag, 'place', command)
         return self._send(kind, tag, 'place', command, table)
 
+    def widen_stop(self, tag):
+        """One price-only modification, authorized by persisted recovery state."""
+        from .stop_fallback import authorize
+        self._require_committed_boundary()
+        with self.ledger.transaction():
+            request, deadline = authorize(self.ledger, tag)
+            table, row = self._row('STOP', tag)
+            command = dict(broker_id=row['broker_id'], request=asdict(request), deadline=deadline)
+            self._record('STOP', tag, 'modify', command)
+            self.ledger.pause()
+        return self._send('STOP', tag, 'modify', command, table)
+
     def cancel(self, kind, tag):
         self._require_committed_boundary()
         with self.ledger.transaction():

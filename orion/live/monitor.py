@@ -17,6 +17,8 @@ from .protection import Protection, check_conflicts
 
 class ProtectionMonitor:
     def __init__(self, ledger, session, *, collect_trades=False):
+        from .stop_fallback import install
+        install(ledger.db)
         self.collect_trades = collect_trades
         self.ledger, self.db, self.session = ledger, ledger.db, session
         self.protection = Protection(ledger)
