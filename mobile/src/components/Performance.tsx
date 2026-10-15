@@ -317,7 +317,11 @@ export default function Performance({ userId }: { userId?: string }) {
               key={x.product}
               accessibilityRole="button"
               accessibilityLabel={`Filter ${x.product}`}
-              onPress={() => setInstrument(x.product)}
+              onPress={() => {
+                setInstrument(x.product);
+                setShowTrades(true);
+                setSelected(null);
+              }}
               style={s.row}
             >
               <View>
@@ -353,6 +357,9 @@ export default function Performance({ userId }: { userId?: string }) {
             active={false}
             onPress={() => setShowTrades(!showTrades)}
           />
+          {showTrades && data.trades.length === 0 && (
+            <Text style={s.note}>No trades recorded for this instrument and period.</Text>
+          )}
           {showTrades &&
             data.trades.map((t: Data) => (
               <View key={t.signal_id} style={s.detail}>
