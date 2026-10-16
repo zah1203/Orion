@@ -124,6 +124,11 @@ class Observations:
                                     self.db.execute("UPDATE broker_commands SET status='CONFIRMED' WHERE kind='STOP' AND tag=? AND operation='modify'", (exit_row['tag'],))
                             elif modified['status'] == 'CONFIRMED':
                                 raise Refused('Confirmed modified stop reverted')
+                            elif observed['status'] in ('FILLED', 'CANCELLED', 'REJECTED'):
+                                # Terminal original terms establish the exposure,
+                                # not acceptance of the requested modification.
+                                # Retain the unresolved journal and surface review.
+                                self.protection.incident('strategy-requires-review')
                         if (observed['order_type'] != ('L' if kind == 'EXIT' else 'SL') or observed['trigger'] != amount(exit_row['trigger']) or
                                 observed['price'] != amount(requested['price'])):
                             raise Refused('Protective order terms changed')

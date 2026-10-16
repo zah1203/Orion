@@ -65,7 +65,7 @@ def authorize(ledger, tag):
     return request, state['deadline']
 
 
-def cycle(manager, entry, stops, now):
+def cycle(manager, entry, stops, now, *, observe_only=False):
     db = manager.db
     if not db.execute('SELECT 1 FROM stop_fallback_policy WHERE entry_tag=?', (entry['tag'],)).fetchone():
         return None
@@ -89,6 +89,8 @@ def cycle(manager, entry, stops, now):
             manager.protection.incident('strategy-requires-review')
             return manager._health('review-required', 'stop-recovery-deadline')
         recovering.append((stop, age))
+    if observe_only:
+        return None
     action = None
     for stop, age in recovering:
         prior = db.execute("SELECT status FROM broker_commands WHERE kind='STOP' AND tag=? AND operation='modify'", (stop['tag'],)).fetchone()

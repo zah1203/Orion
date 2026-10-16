@@ -24,15 +24,22 @@ book. Rejected stops, unknown sends, malformed/stale evidence, unresolved
 commands, odd-lot residuals and incidents do not authorize widening. A lost
 response may mean the broker accepted the modification; reconcile and review,
 never resend. A local timeout cannot undo a request already received by Kotak.
-An acknowledged modification followed by terminal original terms remains held
-for review rather than assuming the modification succeeded.
+An acknowledged modification followed by terminal original terms reconciles the
+actual fills but retains the unconfirmed journal and raises durable review health,
+including when exposure is zero and after restart. It does not assume the
+modification succeeded.
 
 The policy is bound before entry dispatch and retained with the position through
 restart or enrollment revocation. Timers start during observation, even before
 strategy handoff. Automatic widening requires final entry fills and the strategy
 coordinator; an unresolved partial entry remains in cancellation/protection
 handling and cannot gain more time by later handing off. Profit-target timeout
-is a separate setting and is unchanged.
+is a separate setting and takes priority over fallback waiting or expiry. Its
+cancellation still requires a terminal broker observation before restoring stop
+coverage; fallback never releases that reserved target capacity. Stop deadlines
+are recorded even while target cancellation is pending. A quote gap while the
+broker still reports trigger-pending pauses entries without latching a new
+incident that would prevent later eligible recovery; existing incidents remain.
 
 50 ticks is a wider permissible sale limit, not a promised fill or a maximum
 loss. For tick size ₹0.05, gaps are ₹1.00 and ₹2.50 below the trigger. A gap below

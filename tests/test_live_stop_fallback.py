@@ -134,3 +134,88 @@ class StopFallbackTests(unittest.TestCase):
         self.assertEqual(len(self.modifications), 1)
         self.assertEqual(len(self.session.sdk.stops), 1)
         self.assertFalse(self.ledger.db.execute("SELECT 1 FROM broker_commands WHERE operation='cancel'").fetchone())
+
+    def test_quote_gap_before_trigger_does_not_poison_recovery(self):
+        self.cycle()
+        self.assertEqual(self.cycle('88')['action'], 'stop-trigger-pending')
+        self.assertFalse(self.ledger.db.execute('SELECT 1 FROM stop_fallback_state').fetchone())
+        self.assertFalse(self.ledger.db.execute('SELECT 1 FROM live_incidents').fetchone())
+        self.session.sdk.stops[0]['ordSt'] = 'open'
+        self.assertEqual(self.cycle('88')['action'], 'stop-recovery-wait')
+        self.age(6)
+        self.assertEqual(self.cycle('88')['action'], 'stop-widening-requested')
+        self.assertEqual(len(self.modifications), 1)
+
+    def test_pending_quote_gap_does_not_clear_unrelated_incident(self):
+        self.cycle()
+        self.strategy.protection.incident('strategy-requires-review')
+        self.assertEqual(self.cycle('88')['state'], 'review-required')
+        self.session.sdk.stops[0]['ordSt'] = 'open'
+        self.cycle('88'); self.age(6)
+        self.assertEqual(self.cycle('88')['action'], 'stop-widening-blocked')
+        self.assertEqual(self.modifications, [])
+
+    def test_target_timeout_and_reprotection_survive_stop_deadline(self):
+        target = strategy_tests.StrategyTests.to_target(self)
+        self.assertEqual(self.cycle('111')['action'], 'strategy-protection-requested')
+        self.cycle('111')
+        residual = self.session.sdk.stops[-1]
+        residual['ordSt'] = 'open'
+        self.cycle('90')
+        self.ledger.db.execute('UPDATE strategy_plans SET requested_at=?',
+            ((datetime.now(timezone.utc)-timedelta(seconds=11)).isoformat(),))
+        self.age(31)
+        self.assertEqual(self.cycle('88')['action'], 'strategy-cancel-requested')
+        self.assertEqual(self.cycle('88')['state'], 'review-required')
+        self.assertEqual(self.cycle('88')['action'], 'cancel-confirmation-pending')
+        cancels = self.ledger.db.execute(
+            "SELECT * FROM broker_commands WHERE operation='cancel' AND kind='EXIT'").fetchall()
+        self.assertEqual(len(cancels), 1)
+        self.assertEqual(self.modifications, [])
+        self.assertEqual(residual['ordSt'], 'open')
+        target['ordSt'] = 'cancelled'
+        self.assertEqual(self.cycle('88')['action'], 'strategy-protection-requested')
+        self.assertEqual(self.cycle('88')['uncovered'], 0)
+        self.assertEqual(residual['ordSt'], 'open')
+        self.assertTrue(self.ledger.db.execute(
+            "SELECT 1 FROM live_incidents WHERE code='strategy-requires-review'").fetchone())
+
+    def test_working_target_does_not_prevent_eligible_widening(self):
+        strategy_tests.StrategyTests.to_target(self)
+        self.cycle('111'); self.cycle('111')
+        self.session.sdk.stops[-1]['ordSt'] = 'open'
+        self.cycle('90'); self.age(6)
+        self.assertEqual(self.cycle('88')['action'], 'stop-widening-requested')
+        self.assertEqual(len(self.modifications), 1)
+        self.assertEqual(self.modifications[0]['quantity'], '2')
+
+    def test_terminal_original_terms_after_ack_are_reconciled_but_reviewed(self):
+        self.triggered(); self.age(6); self.cycle('88')
+        self.session.sdk.stops[0].update(ordSt='complete', fldQty=3, avgPrc='90')
+        result = self.cycle('88')
+        self.assertEqual(result['exposure'], 0)
+        self.assertEqual(result['state'], 'review-required')
+        self.assertEqual(result['action'], 'stop-modification-unconfirmed')
+        self.assertEqual(self.ledger.db.execute(
+            "SELECT status FROM broker_commands WHERE operation='modify'").fetchone()[0], 'ACKNOWLEDGED')
+        self.assertTrue(self.ledger.db.execute('SELECT paused FROM control').fetchone()[0])
+        self.assertEqual(len(self.modifications), 1)
+        self.ledger.close(); self.ledger = Ledger(self.path, 'a'*32)
+        self.strategy = ExitStrategy(self.ledger, self.session)
+        self.assertEqual(self.cycle('88')['state'], 'review-required')
+        self.assertEqual(len(self.modifications), 1)
+
+    def test_terminal_modify_with_working_target_still_reports_review(self):
+        strategy_tests.StrategyTests.to_target(self)
+        self.cycle('111'); self.cycle('111')
+        residual = self.session.sdk.stops[-1]
+        residual['ordSt'] = 'open'
+        self.cycle('90'); self.age(6); self.cycle('88')
+        residual.update(ordSt='complete', fldQty=2, avgPrc='90')
+        result = self.cycle('88')
+        self.assertEqual(result['exposure'], 1)
+        self.assertEqual(result['state'], 'review-required')
+        self.assertEqual(result['action'], 'target-working')
+        self.assertEqual(self.ledger.db.execute(
+            "SELECT status FROM broker_commands WHERE operation='modify'").fetchone()[0], 'ACKNOWLEDGED')
+        self.assertEqual(len(self.modifications), 1)
