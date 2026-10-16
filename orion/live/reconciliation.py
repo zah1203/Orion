@@ -14,7 +14,7 @@ from .readonly import ProbeFailure, integer, rows
 
 def fingerprint(ledger):
     state = []
-    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts', 'fee_corrections', 'execution_terms', 'execution_attempts', 'broker_commands', 'protection_policy', 'terminal_history', 'broker_fill_evidence', 'exit_terms', 'strategy_plans', 'strategy_cancellations', 'entry_exit_plans', 'abandoned_intents', 'manual_requests', 'manual_cancellations', 'reviewed_statements', 'reviewed_statement_lines', 'daily_cash_allocations'):
+    for table in ('intents', 'protective_exits', 'reconciliation_instruments', 'fill_history', 'fill_contracts', 'fee_corrections', 'execution_terms', 'execution_attempts', 'broker_commands', 'protection_policy', 'terminal_history', 'broker_fill_evidence', 'exit_terms', 'strategy_plans', 'strategy_cancellations', 'entry_exit_plans', 'abandoned_intents', 'manual_requests', 'manual_cancellations', 'reviewed_statements', 'reviewed_statement_lines', 'daily_cash_allocations', 'stop_fallback_policy', 'stop_fallback_state', 'stop_observations'):
         if ledger.db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
             state.append((table, [dict(r) for r in ledger.db.execute(f'SELECT * FROM {table} ORDER BY 1')]))
     return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -69,7 +69,9 @@ def normalize_orders(report, ucc):
         result[oid] = dict(instrument=instrument(row), quantity=quantity, filled=filled,
                            status=status, side=row['trnsTp'], average=avg,
                            price=amount(row.get('prc')), trigger=amount(row.get('trgPrc')),
-                           order_type=text_field(row.get('prcTp')))
+                           order_type=text_field(row.get('prcTp')), trigger_state=(
+                               'pending' if raw == 'trigger pending' else
+                               'triggered' if raw == 'open' and row.get('prcTp') == 'SL' else 'unknown'))
     return result
 
 

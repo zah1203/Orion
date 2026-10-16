@@ -32,6 +32,18 @@ class ExitStrategy(ProtectionMonitor):
                 tag TEXT PRIMARY KEY, entry_tag TEXT NOT NULL);
         ''')
 
+    def _health(self, state, action):
+        # Review follows a terminal-but-unconfirmed modification even if another
+        # target/position is still active or all exposure has already closed.
+        if self.db.execute(
+                "SELECT 1 FROM broker_commands c JOIN protective_exits e ON e.tag=c.tag "
+                "WHERE c.operation='modify' AND c.status!='CONFIRMED' "
+                "AND e.status IN ('FILLED','CANCELLED','REJECTED')").fetchone():
+            state = 'review-required'
+            if action == 'none':
+                action = 'stop-modification-unconfirmed'
+        return super()._health(state, action)
+
     def bind(self, entry_tag, *, targets, stop_limit, target_timeout):
         """Bind once to final filled entry units; partial working entries wait.
 
@@ -149,22 +161,21 @@ class ExitStrategy(ProtectionMonitor):
                     return self._health('review-required', 'rejected-stop')
                 if self.db.execute("SELECT 1 FROM live_incidents WHERE code='unprotected-exposure'").fetchone():
                     return self._health('review-required', 'unexpected-exit-cancellation')
-                quote = marks.get(entry['tag'])
-                fresh = False
-                if isinstance(quote, tuple) and len(quote) == 2:
-                    fresh = 0 <= (now-timestamp(quote[1])).total_seconds() <= 5
-                    price = amount(quote[0])
-                    fresh = fresh and price > 0
-                if fresh and any(r['status'] in ('OPEN','PARTIAL') and price <= amount(r['trigger'])-amount(plan['stop_gap']) for r in stops):
-                    self.protection.incident('strategy-requires-review')
-                    return self._health('review-required', 'stop-limit-gap')
+                from .stop_fallback import cycle as recover_stop
+                # Persist deadlines even when a target cancellation/reprotection
+                # takes this cycle's single command slot.
+                recovery_observation = recover_stop(self, entry, stops, now, observe_only=True)
                 if plan['active_exit']:
                     target = self.protection.get(plan['active_exit'])
                     if target['status'] in ('OPEN','PARTIAL'):
                         if (now-datetime.fromisoformat(plan['requested_at'])).total_seconds() >= plan['target_timeout']:
-                            return self._cancel('EXIT', target)
+                            cancellation = self._cancel('EXIT', target)
+                            if recovery_observation is not None:
+                                return self._health('review-required', cancellation['action'])
+                            return cancellation
                         action = self._protect(entry, plan, terms, stops)
-                        return action or self._health('awaiting-broker', 'target-working')
+                        if action:
+                            return action
                     if target['status'] == 'FILLED':
                         with self.ledger.transaction():
                             self.db.execute("UPDATE strategy_plans SET stage=stage+1,phase='WATCH',active_exit=NULL,requested_at=NULL WHERE entry_tag=?", (entry['tag'],))
@@ -193,6 +204,32 @@ class ExitStrategy(ProtectionMonitor):
                             self.db.execute("UPDATE strategy_plans SET phase='HALTED',active_exit=NULL WHERE entry_tag=?", (entry['tag'],))
                             self.protection.incident('strategy-requires-review')
                         return self._health('review-required', 'target-ended-before-completion')
+                recovery = recovery_observation or recover_stop(self, entry, stops, now)
+                if recovery is not None:
+                    return recovery
+                quote = marks.get(entry['tag'])
+                fresh = False
+                if isinstance(quote, tuple) and len(quote) == 2:
+                    fresh = 0 <= (now-timestamp(quote[1])).total_seconds() <= 5
+                    price = amount(quote[0])
+                    fresh = fresh and price > 0
+                gaps = [r for r in stops if fresh and r['status'] in ('OPEN','PARTIAL')
+                        and price <= amount(r['trigger'])-amount(plan['stop_gap'])]
+                if gaps and self.db.execute('SELECT 1 FROM stop_fallback_policy WHERE entry_tag=?', (entry['tag'],)).fetchone():
+                    # A quote is not broker trigger evidence. Keep entries paused
+                    # without poisoning a later eligible recovery with an incident.
+                    pending = all(self.db.execute(
+                        "SELECT 1 FROM stop_observations WHERE tag=? AND state='pending'",
+                        (r['tag'],)).fetchone() for r in gaps)
+                    if pending:
+                        blocked = self.db.execute('SELECT 1 FROM live_incidents').fetchone()
+                        return self._health('review-required' if blocked else 'awaiting-broker',
+                                            'stop-trigger-pending')
+                if gaps:
+                    self.protection.incident('strategy-requires-review')
+                    return self._health('review-required', 'stop-limit-gap')
+                if plan['active_exit']:
+                    return self._health('awaiting-broker', 'target-working')
                 if plan['phase'] == 'HALTED' or self.db.execute("SELECT 1 FROM live_incidents WHERE code='strategy-requires-review'").fetchone():
                     action = self._protect(entry, plan, terms, stops)
                     return action or self._health('review-required', 'strategy-halted')

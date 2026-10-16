@@ -1,5 +1,5 @@
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
@@ -41,6 +41,8 @@ class FakeSDK:
             raise self.fail
         return self.response
 
+    modify_order = place_order
+
     def cancel_order(self, **kwargs):
         self.calls.append(kwargs)
         return self.response
@@ -59,6 +61,8 @@ class HungSDK(FakeSDK):
         Path(self.marker).write_text('continued-after-timeout')
         return self.response
 
+
+    modify_order = place_order
 
 def hung_factory(creds):
     sdk = HungSDK()
@@ -84,6 +88,34 @@ class KotakTests(unittest.TestCase):
         session.place(replace(REQUEST, kind='STOP', price='89.95', trigger='90'))
         self.assertEqual(sdk.calls[-1]['order_type'], 'SL')
         self.assertEqual(sdk.calls[-1]['transaction_type'], 'S')
+
+    def test_stop_modify_mapping_deadline_and_identity(self):
+        request = replace(REQUEST, kind='STOP', trigger='90', price='87.50')
+        deadline = (datetime.now(timezone.utc)+timedelta(seconds=20)).isoformat()
+        with ProcessSession(CREDS, '123456', _factory=FakeSDK) as process:
+            self.assertEqual(process.request('modify', broker_id='broker1', request=asdict(request), deadline=deadline), {'broker_id':'broker1'})
+        sdk = FakeSDK(); session = KotakSession(sdk, CREDS, '123456')
+        self.assertEqual(session.modify('broker1', request, deadline), 'broker1')
+        self.assertEqual(sdk.calls, [dict(order_id='broker1', price='87.50', order_type='SL',
+            quantity='10', validity='DAY', trigger_price='90', disclosed_quantity='0', amo='NO')])
+        with self.assertRaises(Refused):
+            session.modify('broker1', request, (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat())
+        self.assertEqual(len(sdk.calls), 1)
+        with self.assertRaises(TransportFailure):
+            session.modify('different', request, deadline)
+
+    def test_modify_transport_uses_remaining_deadline(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp)/'accepted'
+            with ProcessSession(CREDS | {'marker':str(marker)}, '123456', _factory=hung_factory) as session:
+                deadline = (datetime.now(timezone.utc)+timedelta(seconds=.3)).isoformat()
+                started = time.monotonic()
+                with self.assertRaises(TransportFailure):
+                    session.request('modify', broker_id='broker1', deadline=deadline,
+                        request=asdict(replace(REQUEST, kind='STOP', trigger='90', price='87.50')))
+                self.assertLess(time.monotonic()-started, 1.5)
+                self.assertFalse(session.child.is_alive())
+                self.assertEqual(marker.read_text(), 'accepted')
 
     def test_malformed_orders_make_no_sdk_call(self):
         sdk = FakeSDK()
@@ -153,6 +185,34 @@ class KotakTests(unittest.TestCase):
                 self.assertEqual(marker.read_text(), 'accepted')
                 self.assertIsNotNone(session.child.exitcode)
                 self.assertFalse(Path(session.temp.name).exists())
+
+    def test_pinned_sdk_modifies_same_order_once(self):
+        import json
+        from urllib.parse import parse_qs
+        requests = []
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json=dict(stat='Ok', stCode=200, nOrdNo='123456789'))
+        with patch.dict(os.environ, {'NEO_LOG_FILE_ENABLED':'false'}):
+            client = make_client(CREDS, transport=httpx.MockTransport(handler))
+            try:
+                client.configuration.edit_token = 'fake'
+                client.configuration.edit_sid = 'fake'
+                client.configuration.base_url = ROUTE
+                client.configuration.ucc = 'TESTUCC'
+                response = client.modify_order(order_id='123456789', price='87.50', order_type='SL',
+                    quantity='10', validity='DAY', trigger_price='90', disclosed_quantity='0', amo='NO')
+                from orion.live.kotak import acknowledgement
+                self.assertEqual(acknowledgement(response, expected='123456789'), '123456789')
+                self.assertEqual(len(requests), 1)
+                payload = json.loads(parse_qs(requests[0].content.decode())['jData'][0])
+                self.assertEqual(payload['no'], '123456789')
+                self.assertEqual(payload['qt'], '10')
+                self.assertEqual(payload['pr'], '87.50')
+                self.assertEqual(payload['tp'], '90')
+                self.assertEqual(payload['pt'], 'SL')
+            finally:
+                client.api_client.rest_client.session.close()
 
     def test_real_pinned_sdk_uses_mock_http_no_redirect_or_retry(self):
         requests = []
