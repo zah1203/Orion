@@ -65,7 +65,7 @@ def _child(pipe, factory, temp):
             elif operation == 'quotes':
                 result = session.quotes(command['instruments'])
             elif operation == 'market':
-                result = session.market()
+                result = session.market(segment=command.get('segment', 'nse_fo'))
             elif operation == 'funding':
                 result = session.funding(OrderRequest(**command['request']), command['token'])
             elif operation == 'margin':

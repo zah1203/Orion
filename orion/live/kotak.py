@@ -30,8 +30,13 @@ class OrderRequest:
     price: str
     kind: str
     trigger: str = '0'
+    # Appended after trigger so legacy NSE positional requests keep their meaning.
+    # MCX callers must bind this explicitly; symbols never choose a segment.
+    segment: str = 'nse_fo'
 
     def parameters(self):
+        if self.segment not in ('nse_fo', 'mcx_fo'):
+            raise Refused('Explicit supported derivatives segment required')
         if not isinstance(self.tag, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', self.tag):
             raise Refused('Invalid order tag')
         text_field(self.symbol)
@@ -45,8 +50,9 @@ class OrderRequest:
             raise Refused('Unsupported order purpose')
         if (self.kind == 'STOP' and not 0 < price <= trigger) or (self.kind != 'STOP' and trigger):
             raise Refused('Invalid protective limit/trigger')
-        # NSE NRML pilot only. No market, AMO, margin or caller-defined SDK kwargs.
-        return dict(exchange_segment='nse_fo', product='NRML', price=format(price, 'f'),
+        # Fixed NRML only. No market, AMO, margin or caller-defined SDK kwargs.
+        # Transport compatibility is not admission, verified economics or funding.
+        return dict(exchange_segment=self.segment, product='NRML', price=format(price, 'f'),
                     order_type='SL' if self.kind == 'STOP' else 'L',
                     quantity=str(self.quantity), validity='DAY', trading_symbol=self.symbol,
                     transaction_type='B' if self.kind == 'ENTRY' else 'S', amo='NO',
@@ -116,6 +122,10 @@ class KotakSession:
     def place(self, request):
         self._check()
         params = request.parameters()
+        # A direct IPC caller cannot bypass the pending commodity acceptance
+        # gate. Pure parameter encoding and protective STOP/EXIT remain testable.
+        if request.segment == 'mcx_fo' and request.kind == 'ENTRY':
+            raise Refused('MCX entry submission remains disabled pending acceptance')
         try:
             return acknowledgement(self.client.place_order(**params))
         except Exception:
@@ -174,11 +184,13 @@ class KotakSession:
         parameters = request.parameters()
         if request.kind != 'ENTRY' or not isinstance(token, str) or not re.fullmatch(r'[1-9][0-9]{0,11}', token):
             raise Refused('Bound entry instrument required')
+        if request.segment != 'nse_fo':
+            raise Refused('MCX margin and cash semantics are unverified')
         self._check()
         started = datetime.now(timezone.utc)
         try:
             response = self.client.margin_required(
-                exchange_segment='nse_fo', product='NRML', order_type='L',
+                exchange_segment=request.segment, product='NRML', order_type='L',
                 transaction_type='B', instrument_token=token,
                 price=parameters['price'], quantity=parameters['quantity'])
             self._check()
@@ -191,7 +203,7 @@ class KotakSession:
                 raise ValueError
             fields = {k:str(bounded_amount(data[k])) for k in
                       ('avlCash','totMrgnUsd','mrgnUsd','ordMrgn','reqdMrgn','avlMrgn','insufFund')}
-            return dict(ucc=self.ucc, token=token, symbol=request.symbol,
+            return dict(ucc=self.ucc, segment=request.segment, token=token, symbol=request.symbol,
                         quantity=request.quantity, price=parameters['price'],
                         started_at=started.isoformat(), completed_at=completed.isoformat(),
                         reported=fields, available_cash_verified=False,
@@ -210,6 +222,9 @@ class KotakSession:
         request.parameters()
         if request.kind != 'ENTRY' or not isinstance(token, str) or not re.fullmatch(r'[1-9][0-9]{0,11}', token):
             raise Refused('Bound entry instrument required')
+        # Do not read generic NSE RMS fields and relabel them as commodity cash.
+        if request.segment != 'nse_fo':
+            raise Refused('MCX funding and cash semantics are unverified')
         self._check()
         started, clock = datetime.now(timezone.utc), time.monotonic()
         try:
@@ -223,7 +238,7 @@ class KotakSession:
             if (before != after or after_at < before_at or time.monotonic()-clock > 5 or
                     not 0 <= (completed-before_at).total_seconds() <= 5):
                 raise ValueError
-            return dict(ucc=self.ucc, token=token, symbol=request.symbol,
+            return dict(ucc=self.ucc, segment=request.segment, token=token, symbol=request.symbol,
                 quantity=request.quantity, price=estimate['price'],
                 started_at=started.isoformat(), completed_at=completed.isoformat(),
                 rms_before_at=before_at.isoformat(), rms_after_at=after_at.isoformat(),
@@ -236,13 +251,15 @@ class KotakSession:
             self.closed = True
             raise TransportFailure('Broker funding evidence rejected') from None
 
-    def market(self):
+    def market(self, segment='nse_fo'):
         from .market import read
+        if segment not in ('nse_fo', 'mcx_fo'):
+            raise Refused('Explicit supported derivatives segment required')
         self._check()
         try:
-            value = read(self.client)
+            value = read(self.client, segment=segment)
         except Refused:
-            value = dict(segment='nse_fo', status_code=None,
+            value = dict(segment=segment, status_code=None,
                          observed_at=datetime.now(timezone.utc).isoformat(), market_unavailable=True)
         self._check()
         return dict(value, ucc=self.ucc, order_submission_available=False)
@@ -253,8 +270,8 @@ class KotakSession:
         expected = instruments(requested)
         self._check()
         try:
-            response = self.client.quotes(instrument_tokens=[dict(exchange_segment='nse_fo', instrument_token=token)
-                                          for token in expected], quote_type='all')
+            response = self.client.quotes(instrument_tokens=[dict(exchange_segment=segment, instrument_token=token)
+                                          for segment, token in expected], quote_type='all')
             self._check()
             return dict(ucc=self.ucc, quotes=normalize_quotes(response, expected, now=datetime.now(timezone.utc)),
                         market_open_verified=False, order_submission_available=False)

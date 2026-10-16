@@ -55,9 +55,9 @@ class SignalRouter:
 
     def _channel(self, policy, channel):
         selected = policy['channels'].get(channel)
-        if (not isinstance(selected, dict) or selected.get('profile') != 'index' or
+        if (not isinstance(selected, dict) or selected.get('profile') not in ('index', 'commodity') or
                 not isinstance(selected.get('products'), list)):
-            raise Refused('Selected index channel required')
+            raise Refused('Selected supported channel required')
         digest = hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
         return selected, digest
 
@@ -65,7 +65,8 @@ class SignalRouter:
                 edited=False, reply_to=None):
         """Reject backfill, edits, replies, unsupported signals and changed replay.
 
-        Initial pilot admission accepts explicit-expiry NSE range signals only.
+        Admission accepts explicit-expiry range signals with segment-specific validation.
+        MCX requires fresh attested economics and remains blocked from execution.
         Above/cross signals need a separately reviewed slippage/crossing policy;
         neither that policy nor overnight permission is copied from Paper.
         """
@@ -100,11 +101,15 @@ class SignalRouter:
                 raise Refused('Source message changed; candidate invalidated')
             try:
                 signal = parse_signal(text, source_at.isoformat())
-                if (signal['product'] not in selected['products'] or signal['product'] not in ('NIFTY','BANKNIFTY') or
+                if (signal['product'] not in selected['products'] or signal['product'] not in (('NIFTY','BANKNIFTY') if selected['profile'] == 'index' else
+                            ('CRUDEOIL','CRUDEOILM','GOLD','GOLDM','SILVER','SILVERM')) or
                         not signal['expiry'] or signal['overnight'] or signal['entry_mode'] != 'range'):
                     raise ValueError
                 contract = resolve(signal, master, now)
-                if contract['segment'] != 'nse_fo' or amount(contract['premium_multiplier']) != 1:
+                if selected['profile'] == 'commodity':
+                    from .commodity import review_contract
+                    contract['commodity_evidence'] = review_contract(contract, master, now)
+                elif contract['segment'] != 'nse_fo' or amount(contract['premium_multiplier']) != 1:
                     raise ValueError
                 lot = contract['order_quantity_per_lot']
                 if type(lot) is not int or not 0 < lot <= 100000:
@@ -117,7 +122,7 @@ class SignalRouter:
                     raise ValueError
             except (ValueError, TypeError, KeyError):
                 raise Refused('Unsupported signal or unverified contract') from None
-            contract = {k:contract[k] for k in ('product','strike','option_type','segment','expiry','expiry_at','symbol','token','order_quantity_per_lot','premium_multiplier','tick_size')}
+            contract = {k:contract[k] for k in ('product','strike','option_type','segment','expiry','expiry_at','symbol','token','order_quantity_per_lot','premium_multiplier','tick_size','commodity_evidence') if k in contract}
             body = json.dumps(dict(signal=signal, contract=contract), sort_keys=True)
             with self.ledger.transaction():
                 self.db.execute("INSERT INTO live_signals VALUES(?,?,?,?,?,?,?,?, 'PENDING')",
@@ -163,17 +168,22 @@ class SignalRouter:
                 raise Refused('Quote instrument mismatch')
             if (datetime.fromisoformat(contract['expiry_at'])-now).total_seconds() <= 1800:
                 raise Refused('Contract near expiry')
+            economics = None
+            if contract['segment'] == 'mcx_fo':
+                from .commodity import validate_saved_contract
+                economics = validate_saved_contract(contract, now)
             tick = amount(contract['tick_size'])
             if bid % tick or ask % tick or not amount(signal['entry_low']) <= ask <= amount(signal['entry_high']):
                 raise Refused('Quote outside tick-aligned entry range')
             with localcontext() as ctx:
                 ctx.prec = 80
                 lot = contract['order_quantity_per_lot']
+                money_per_lot = economics.premium_rupees_per_lot_point if economics else amount(lot)
                 fee = amount(limits['fee_reserve'])
                 premium = min(amount(limits[k]) for k in ('capital','max_order_premium','max_open_premium'))-fee
                 risk = min(amount(limits[k]) for k in ('max_trade_loss','max_open_risk','daily_loss'))-fee
-                lots = min(limits['max_lots'], int((premium/(ask*lot)).to_integral_value(rounding=ROUND_FLOOR)),
-                           int((risk/((ask-amount(signal['stop']))*lot)).to_integral_value(rounding=ROUND_FLOOR)))
+                lots = min(limits['max_lots'], int((premium/(ask*money_per_lot)).to_integral_value(rounding=ROUND_FLOOR)),
+                           int((risk/((ask-amount(signal['stop']))*money_per_lot)).to_integral_value(rounding=ROUND_FLOOR)))
             if lots <= 0:
                 raise Refused('No whole lot fits reviewed policy')
             candidate = dict(account=self.uid, source=source, policy_version=policy['version'],
@@ -183,6 +193,12 @@ class SignalRouter:
                 order_submission_available=False,
                 blockers=['verified-cash-and-charges','current-ledger-risk-and-reservations',
                           'atomic-entry-authorization','production-feed-provenance'])
+            if economics is not None:
+                candidate.update(source_digest=row['digest'], premium_multiplier=str(economics.premium_rupees_per_lot_point),
+                                 quantity_multiplier=str(economics.rupees_per_quantity_point),
+                                 commodity_evidence=contract['commodity_evidence'])
+                candidate['blockers'].extend(['mcx-broker-acceptance','mcx-expiry-exit-policy',
+                                              'mcx-broker-cash-and-settlement-verification'])
             if accounting is not None:
                 from .entry_risk import assess
                 # Current consent/channel and risk are read under the same

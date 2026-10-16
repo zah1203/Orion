@@ -13,16 +13,25 @@ class QuoteUnavailable(Refused):
 
 
 def instruments(values):
+    """Bind identity by segment and token, never by a token alone.
+
+    Legacy two-field requests are confined to NSE. MCX requires an explicit
+    segment; there is no product-name inference or alternate-exchange retry.
+    """
     if not isinstance(values, list) or not 1 <= len(values) <= 50:
         raise Refused('One to fifty bound instruments required')
     result = {}
     for row in values:
-        if not isinstance(row, dict) or set(row) != {'token','symbol'}:
+        if not isinstance(row, dict) or set(row) not in ({'token','symbol'}, {'segment','token','symbol'}):
             raise Refused('Explicit instrument identity required')
+        segment = row.get('segment', 'nse_fo')
+        if segment not in ('nse_fo', 'mcx_fo'):
+            raise Refused('Explicit supported derivatives segment required')
         token, symbol = text_field(row['token']), text_field(row['symbol'])
-        if not re.fullmatch(r'[0-9]{1,12}', token) or token in result:
-            raise Refused('Unique NSE instrument tokens required')
-        result[token] = symbol
+        key = (segment, token)
+        if not re.fullmatch(r'[0-9]{1,12}', token) or key in result:
+            raise Refused('Unique segment-bound instrument tokens required')
+        result[key] = symbol
     return result
 
 
@@ -33,10 +42,13 @@ def normalize_quotes(response, expected, *, now):
     for row in response:
         if not isinstance(row, dict):
             raise Refused('Invalid quote response')
-        token = row.get('exchange_token')
-        if token not in expected or token in seen or row.get('exchange') != 'nse_fo' or row.get('display_symbol') != expected[token]:
+        token, segment = row.get('exchange_token'), row.get('exchange')
+        if not isinstance(token, str) or not isinstance(segment, str):
             raise Refused('Quote identity mismatch')
-        seen.add(token)
+        key = (segment, token)
+        if key not in expected or key in seen or row.get('display_symbol') != expected[key]:
+            raise Refused('Quote identity mismatch')
+        seen.add(key)
         at = datetime.fromtimestamp(integer(row.get('lstup_time')), timezone.utc)
         if not 0 <= (now-at).total_seconds() <= 5:
             raise QuoteUnavailable('Stale broker quote')
@@ -57,6 +69,6 @@ def normalize_quotes(response, expected, *, now):
         bid, ask = sides
         if bid > ask:
             raise Refused('Crossed broker quote')
-        result.append(dict(segment='nse_fo',token=token,symbol=expected[token],bid=str(bid),ask=str(ask),
+        result.append(dict(segment=segment,token=token,symbol=expected[key],bid=str(bid),ask=str(ask),
                            quoted_at=at.isoformat(),observed_at=now.isoformat(),market_open_verified=False))
     return result
