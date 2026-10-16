@@ -63,7 +63,10 @@ def request(monitor, *, request_id, entry_tag, action, limit_price=None, now=Non
                 raise Refused('Explicit tick-aligned exit limit required')
             from .kotak import OrderRequest
             body = json.loads(entry['body'])
-            OrderRequest(tag=entry_tag, symbol=body['symbol'], quantity=quantity,
+            if body['segment'] == 'mcx_fo':
+                from .entry_plans import bound_quantity_multiplier
+                bound_quantity_multiplier(ledger, entry_tag)
+            OrderRequest(tag=entry_tag, symbol=body['symbol'], segment=body['segment'], quantity=quantity,
                 lot_size=terms['lot_size'], tick=terms['tick'], kind='EXIT', price=price).parameters()
         db.execute('INSERT INTO manual_requests VALUES(?,?,?,?,?,?,?,NULL)',
             (request_id, entry_tag, action, price, quantity, (now+timedelta(seconds=60)).isoformat(), 'PENDING'))

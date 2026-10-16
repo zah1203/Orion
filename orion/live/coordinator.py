@@ -37,16 +37,16 @@ class EntryCoordinator:
             raise Refused('Current connected signal source required') from None
         return json.loads(row['body'])['contract']
 
-    def _market(self, evidence, *, started):
+    def _market(self, evidence, *, started, segment='nse_fo'):
         try:
             at = timestamp(datetime.fromisoformat(evidence['observed_at']))
-            if (evidence['ucc'] != self.account.session.ucc or evidence['segment'] != 'nse_fo'
+            if (evidence['ucc'] != self.account.session.ucc or evidence['segment'] != segment
                     or type(evidence['status_code']) is not int or evidence['status_code'] != 1
                     or evidence.get('market_unavailable') or evidence.get('order_submission_available') is not False
                     or at < started or not 0 <= (datetime.now(timezone.utc)-at).total_seconds() <= 5):
                 raise ValueError
         except (ValueError, KeyError, TypeError):
-            raise Refused('Fresh broker NSE open-status notification required') from None
+            raise Refused('Fresh broker segment-bound open-status notification required') from None
 
     def _evaluate(self, source):
         self.last_stage = 'signal-source'
@@ -59,19 +59,20 @@ class EntryCoordinator:
         # No account or SQLite lock is held across evidence collection.
         try:
             self.last_stage = 'market-status'
-            market = a.session.request('market')
-            self._market(market, started=start)
+            market = a.session.request('market', **({'segment': contract['segment']} if contract['segment'] != 'nse_fo' else {}))
+            self._market(market, started=start, segment=contract['segment'])
             self.last_stage = 'entry-quote'
-            received = a.session.request('quotes', instruments=[dict(token=contract['token'],symbol=contract['symbol'])])
+            received = a.session.request('quotes', instruments=[dict(token=contract['token'],symbol=contract['symbol'],
+                **({'segment': contract['segment']} if contract['segment'] != 'nse_fo' else {}))])
             if received.get('ucc') != a.session.ucc or len(received.get('quotes', [])) != 1:
                 raise Refused('Complete account-bound entry quote required')
             q = received['quotes'][0]
             at = timestamp(datetime.fromisoformat(q['quoted_at']))
             observed = timestamp(datetime.fromisoformat(q['observed_at']))
-            if ((q['token'],q['symbol'],q['segment']) != (contract['token'],contract['symbol'],'nse_fo')
+            if ((q['token'],q['symbol'],q['segment']) != (contract['token'],contract['symbol'],contract['segment'])
                     or not start <= observed <= datetime.now(timezone.utc) or at > observed):
                 raise Refused('Entry quote identity or collection time changed')
-            quote = dict(segment='nse_fo',token=q['token'],bid=q['bid'],ask=q['ask'],quoted_at=at,market_open=True)
+            quote = dict(segment=contract['segment'],token=q['token'],bid=q['bid'],ask=q['ask'],quoted_at=at,market_open=True)
             self.last_stage = 'risk-marks'
             marks = collect_marks(self.ledger,a.session)
             self.last_stage = 'cash-risk-and-margin'
@@ -84,7 +85,7 @@ class EntryCoordinator:
         with a.store.lock(a.uid), self.ledger.transaction():
             self.last_stage = 'final-recheck'
             self._source(source)
-            self._market(market,started=start)
+            self._market(market,started=start, segment=contract['segment'])
             if time.monotonic()-clock > 5 or report['broker_reports_shortfall']:
                 raise Refused('Entry evidence expired or broker funding shortfall')
             current = p.plans.router._quote_locked(source,accounting=p.accounting,cash=p.cash,marks=marks,**quote)
@@ -112,7 +113,7 @@ class EntryCoordinator:
         with a.store.lock(a.uid):
             with self.ledger.transaction():
                 self._source(source)
-                self._market(market,started=started)
+                self._market(market,started=started, segment=quote['segment'])
                 if time.monotonic()-clock > 5 or status.release_status()['order_submission_available'] is not True:
                     raise Refused('Entry authorization expired')
                 self.authority.require()

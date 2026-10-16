@@ -46,6 +46,9 @@ def authorize(ledger, tag):
     entry = ledger.get(row['entry_tag'])
     if entry['status'] not in ('FILLED', 'CANCELLED'):
         raise Refused('Final entry fills required')
+    body = json.loads(entry['body'])
+    from .entry_plans import bound_quantity_multiplier
+    bound_quantity_multiplier(ledger, row['entry_tag'])
     terms = db.execute('SELECT * FROM execution_terms WHERE tag=?', (row['entry_tag'],)).fetchone()
     old = db.execute("SELECT request FROM broker_commands WHERE kind='STOP' AND tag=? AND operation='place'", (tag,)).fetchone()
     if not terms or not old:
@@ -58,7 +61,7 @@ def authorize(ledger, tag):
         raise Refused('Whole-lot residual exposure required')
     # Kotak modify quantity is TOTAL order quantity, not remaining quantity.
     # Keeping that total and the same ID prevents adding back already filled units.
-    request = OrderRequest(tag=tag, symbol=json.loads(entry['body'])['symbol'],
+    request = OrderRequest(tag=tag, symbol=body['symbol'], segment=body['segment'],
         quantity=row['quantity'], lot_size=terms['lot_size'], tick=terms['tick'],
         kind='STOP', trigger=row['trigger'], price=str(trigger-50*tick))
     request.parameters()

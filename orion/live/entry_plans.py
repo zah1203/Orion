@@ -6,9 +6,61 @@ still have separate gates. Existing exposure retains its saved exits on revocati
 from datetime import datetime, timezone
 import json
 
-from .accounting import timestamp
+from .accounting import timestamp, bounded_amount
 from .ledger import Refused, amount
 from .routing import SignalRouter, reviewed_policy
+
+
+def bound_quantity_multiplier(ledger, entry_tag):
+    """Read frozen MCX economics for existing exposure, never a BUY permit.
+
+    Historical protection uses the admission-time snapshot, rather than today's
+    master, expiry or consent. Missing evidence is not replaced with a default.
+    """
+    entry = ledger.get(entry_tag)
+    body = json.loads(entry['body'])
+    if body['segment'] == 'nse_fo':
+        frozen_table = ledger.db.execute("SELECT 1 FROM sqlite_master WHERE name='entry_contract_economics'").fetchone()
+        if ('quantity_multiplier' in body or 'source_digest' in body or (frozen_table and
+                ledger.db.execute('SELECT 1 FROM entry_contract_economics WHERE entry_tag=?', (entry_tag,)).fetchone())):
+            raise Refused('Commodity evidence cannot become an NSE reservation')
+        return amount(1)  # Existing NSE quantity-unit convention is unchanged.
+    if body['segment'] != 'mcx_fo':
+        raise Refused('Unsupported execution segment')
+    db = ledger.db
+    for table in ('entry_contract_economics', 'entry_exit_plans', 'fill_contracts',
+                  'reconciliation_instruments', 'execution_terms'):
+        if not db.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone():
+            raise Refused('Bound MCX source economics required')
+    frozen = db.execute('SELECT * FROM entry_contract_economics WHERE entry_tag=?', (entry_tag,)).fetchone()
+    plan = db.execute('SELECT * FROM entry_exit_plans WHERE entry_tag=?', (entry_tag,)).fetchone()
+    accounting = db.execute('SELECT multiplier FROM fill_contracts WHERE entry_tag=?', (entry_tag,)).fetchone()
+    instrument = db.execute('SELECT * FROM reconciliation_instruments WHERE entry_tag=?', (entry_tag,)).fetchone()
+    terms = db.execute('SELECT * FROM execution_terms WHERE tag=?', (entry_tag,)).fetchone()
+    if not all((frozen, plan, accounting, instrument, terms)):
+        raise Refused('Bound MCX source economics required')
+    from .commodity import validate_saved_contract
+    try:
+        contract = json.loads(frozen['contract'])
+        economics = validate_saved_contract(contract, timestamp(datetime.fromisoformat(frozen['validated_at'])))
+        factor = economics.rupees_per_quantity_point
+        if (frozen['source'] != entry['event'] or frozen['source'] != plan['source'] or
+                frozen['source_digest'] != plan['source_digest'] or
+                body['source_digest'] != frozen['source_digest'] or
+                bounded_amount(body['quantity_multiplier']) != factor or
+                bounded_amount(frozen['quantity_multiplier']) != factor or
+                bounded_amount(accounting[0]) != factor or
+                contract['segment'] != body['segment'] or contract['symbol'] != body['symbol'] or
+                instrument['product'] != 'NRML' or instrument['token'] != contract['token'] or
+                terms['lot_size'] != economics.order_quantity_per_lot or
+                bounded_amount(terms['tick']) != economics.tick_size or
+                type(body['quantity']) is not int or body['quantity'] <= 0 or
+                body['quantity'] % economics.order_quantity_per_lot):
+            raise Refused('Bound MCX economics mismatch')
+        economics.aligned_price(body['limit_price'])
+        return factor
+    except (KeyError, TypeError, ValueError):
+        raise Refused('Bound MCX economics mismatch') from None
 
 
 class EntryPlans:
@@ -23,6 +75,10 @@ class EntryPlans:
             source_digest TEXT NOT NULL, policy_version INTEGER NOT NULL,
             targets TEXT NOT NULL, stop_limit TEXT NOT NULL,
             target_timeout INTEGER NOT NULL)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS entry_contract_economics(
+            entry_tag TEXT PRIMARY KEY, source TEXT NOT NULL,
+            source_digest TEXT NOT NULL, contract TEXT NOT NULL,
+            quantity_multiplier TEXT NOT NULL, validated_at TEXT NOT NULL)''')
 
     def bind(self, entry_tag):
         """Bind exact admitted source and current reviewed exit limits, no defaults.
@@ -51,6 +107,17 @@ class EntryPlans:
         body = json.loads(entry['body'])
         normalized = json.loads(source['body'])
         signal, contract = normalized['signal'], normalized['contract']
+        economics = None
+        if contract['segment'] == 'mcx_fo':
+            from .commodity import validate_saved_contract
+            validated_at = datetime.now(timezone.utc)
+            economics = validate_saved_contract(contract, validated_at)
+            accounting = self.db.execute('SELECT multiplier FROM fill_contracts WHERE entry_tag=?', (entry_tag,)).fetchone()
+            if not accounting or bounded_amount(accounting[0]) != economics.rupees_per_quantity_point:
+                raise Refused('Admitted MCX accounting multiplier required')
+            if (body.get('source_digest') != source['digest'] or
+                    bounded_amount(body.get('quantity_multiplier', 0)) != economics.rupees_per_quantity_point):
+                raise Refused('Admitted MCX reservation economics required')
         terms = self.db.execute('SELECT * FROM execution_terms WHERE tag=?', (entry_tag,)).fetchone()
         instrument = self.db.execute('SELECT * FROM reconciliation_instruments WHERE entry_tag=?', (entry_tag,)).fetchone()
         if (timestamp(datetime.fromisoformat(contract['expiry_at']))-datetime.now(timezone.utc)).total_seconds() <= 1800:
@@ -60,7 +127,7 @@ class EntryPlans:
         targets = [amount(v) for v in signal['targets']]
         if (not terms or not instrument or instrument['product'] != 'NRML' or
                 instrument['token'] != contract['token'] or body['symbol'] != contract['symbol'] or
-                body['segment'] != contract['segment'] or body['segment'] != 'nse_fo' or
+                body['segment'] != contract['segment'] or body['segment'] not in ('nse_fo', 'mcx_fo') or
                 body['side'] != 'BUY' or body['mode'] != 'live' or
                 timestamp(datetime.fromisoformat(body['signal_time'])) != timestamp(datetime.fromisoformat(source['signal_time'])) or
                 terms['lot_size'] != lot or amount(terms['tick']) != tick or amount(terms['stop']) != stop or
@@ -83,6 +150,14 @@ class EntryPlans:
         old = self.db.execute('SELECT * FROM entry_exit_plans WHERE entry_tag=?', (entry_tag,)).fetchone()
         if old and tuple(old) != values:
             raise Refused('Bound entry exit plan cannot change')
+        if economics is not None:
+            prior = self.db.execute('SELECT * FROM entry_contract_economics WHERE entry_tag=?', (entry_tag,)).fetchone()
+            frozen = (entry_tag, source['source'], source['digest'],
+                      json.dumps(contract, sort_keys=True), str(economics.rupees_per_quantity_point),
+                      prior['validated_at'] if prior else validated_at.isoformat())
+            if prior and tuple(prior) != frozen:
+                raise Refused('Bound MCX source economics cannot change')
+            self.db.execute('INSERT OR IGNORE INTO entry_contract_economics VALUES(?,?,?,?,?,?)', frozen)
         self.monitor.bind_stop_limit(entry_tag, stop_limit)
         self.db.execute('INSERT OR IGNORE INTO entry_exit_plans VALUES(?,?,?,?,?,?,?)', values)
         return dict(self.db.execute('SELECT * FROM entry_exit_plans WHERE entry_tag=?', (entry_tag,)).fetchone())

@@ -9,21 +9,23 @@ from datetime import datetime, timezone
 from .ledger import Refused
 
 
-async def observe(client):
+async def observe(client, segment='nse_fo'):
+    if segment not in ('nse_fo', 'mcx_fo'):
+        raise Refused('Explicit supported derivatives segment required')
     from neo_api_client.websocket.feed import SFeedMarketStatus
     async with asyncio.timeout(3):
         async with client.create_websocket(max_connect_retries=0, max_reconnect_attempts=0,
                                            ack_wait_timeout=2, verify_ssl=True) as ws:
             await ws.subscribe_exchange()
             async for event in ws:
-                if isinstance(event, SFeedMarketStatus) and event.exchange_segment == 'nse_fo':
-                    return dict(segment='nse_fo', status_code=event.status_code,
+                if isinstance(event, SFeedMarketStatus) and event.exchange_segment == segment:
+                    return dict(segment=segment, status_code=event.status_code,
                                 observed_at=datetime.now(timezone.utc).isoformat())
-    raise Refused('Fresh NSE market status unavailable')
+    raise Refused('Fresh segment-bound market status unavailable')
 
 
-def read(client):
+def read(client, segment='nse_fo'):
     try:
-        return asyncio.run(observe(client))
+        return asyncio.run(observe(client, segment=segment))
     except Exception:
-        raise Refused('Fresh NSE market status unavailable') from None
+        raise Refused('Fresh segment-bound market status unavailable') from None

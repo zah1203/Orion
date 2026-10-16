@@ -50,7 +50,7 @@ class ProtectionMonitor:
         if not terms:
             raise Refused('Execution terms required')
         # Validate the same precision, sizing and ordering that transport enforces.
-        OrderRequest(tag=entry_tag, symbol=body['symbol'], quantity=body['quantity'],
+        OrderRequest(tag=entry_tag, symbol=body['symbol'], segment=body['segment'], quantity=body['quantity'],
                      lot_size=terms['lot_size'], tick=terms['tick'], price=stop_limit,
                      kind='STOP', trigger=terms['stop']).parameters()
         value = str(amount(stop_limit))

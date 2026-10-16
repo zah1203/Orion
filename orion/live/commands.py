@@ -45,8 +45,13 @@ class Commands:
             body = json.loads(self.ledger.get(entry_tag)['body'])
             terms = self.db.execute('SELECT * FROM execution_terms WHERE tag=?', (entry_tag,)).fetchone()
             binding = self.db.execute('SELECT product FROM reconciliation_instruments WHERE entry_tag=?', (entry_tag,)).fetchone()
-            if not terms or not binding or body['segment'] != 'nse_fo' or binding[0] != 'NRML':
-                raise Refused('NSE NRML execution terms required')
+            if not terms or not binding or body['segment'] not in ('nse_fo', 'mcx_fo') or binding[0] != 'NRML':
+                raise Refused('Supported NRML execution terms required')
+            if body['segment'] == 'mcx_fo':
+                if kind == 'ENTRY':
+                    raise Refused('MCX BUY dispatch remains unavailable pending monetary and account verification')
+            from .entry_plans import bound_quantity_multiplier
+            bound_quantity_multiplier(self.ledger, entry_tag)
             if kind == 'ENTRY' and not self.db.execute('SELECT 1 FROM execution_attempts WHERE tag=?', (tag,)).fetchone():
                 raise Refused('Atomic risk/dispatch record required')
             if kind == 'ENTRY':
@@ -74,7 +79,7 @@ class Commands:
                                    limit_price=exit_price, exit_tag=tag)
                 elif self.db.execute('SELECT 1 FROM live_incidents').fetchone():
                     raise Refused('Target blocked by unresolved incident')
-            request = OrderRequest(tag=tag, symbol=body['symbol'],
+            request = OrderRequest(tag=tag, symbol=body['symbol'], segment=body['segment'],
                 quantity=body['quantity'] if kind == 'ENTRY' else row['quantity'],
                 lot_size=terms['lot_size'], tick=terms['tick'], kind=kind,
                 price=body['limit_price'] if kind == 'ENTRY' else exit_price,

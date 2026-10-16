@@ -169,7 +169,9 @@ class CashAllocation:
                     raise Refused('Bound cash reservation terms required')
                 terminal = entry['status'] in ('FILLED','CANCELLED','REJECTED')
                 units = entry['filled'] if terminal else body['quantity']
-                used += bounded_amount(body['limit_price'])*units
+                from .entry_plans import bound_quantity_multiplier
+                multiplier = bound_quantity_multiplier(self.ledger, entry['tag'])
+                used += bounded_amount(body['limit_price'])*units*multiplier
                 recorded = Decimal(0)
                 for fill in self.db.execute('SELECT * FROM fill_history WHERE entry_tag=?', (entry['tag'],)):
                     latest = self.db.execute('''SELECT total_fee FROM fee_corrections WHERE segment=? AND trade_day=?
