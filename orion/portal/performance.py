@@ -117,9 +117,13 @@ def performance(state, records, quote_age, period='week', instrument='ALL', star
         own=[c for c in selected if c['product']==product]
         if any(c['start']<=hi and c['end']>=lo for c in own):
             breakdown.append(dict(product=product,realized=value(own,lo,hi),entries=entry_count(product,lo,hi)))
+    breakdown_mismatch = (instrument == 'ALL' and all(x['realized'] is not None for x in breakdown)
+        and sum((dec(x['realized']) for x in breakdown), Decimal(0)) != dec(realized))
     return dict(period=period,start=lo,end=hi,timezone='Asia/Kolkata',instrument=instrument,group_by=group_by,
         realized=realized,entries=sum(x['entries'] for x in daily),daily=daily,chart=list(buckets.values()),
         instruments=breakdown,available_instruments=list(PRODUCTS),trades=trades,
         current_open=dict(unrealized=open_pnl,positions=len(current),mark_status='unavailable' if open_pnl is None else 'stale' if any(p['mark_status']=='stale' for p in current) else 'fresh',as_of=now.isoformat()),
+        breakdown_mismatch=breakdown_mismatch,
         incomplete_breakdown=any(x['realized'] is None for x in breakdown) or any(x['realized'] is None for x in buckets.values()),
         note='Realized P&L includes charged paper fees on their ledger date in India. Balance adjustments are excluded. Open P&L is a current estimate, not a return for the selected dates. Some older cross-day instrument splits are unavailable because historical event-level fees were not recorded.')
+
