@@ -6,6 +6,7 @@ still have separate gates. Existing exposure retains its saved exits on revocati
 from datetime import datetime, timezone
 import json
 
+from ..core import ALLOCATION_VERSION
 from .accounting import timestamp
 from .ledger import Refused, amount
 from .routing import SignalRouter, reviewed_policy
@@ -22,7 +23,10 @@ class EntryPlans:
             entry_tag TEXT PRIMARY KEY, source TEXT UNIQUE NOT NULL,
             source_digest TEXT NOT NULL, policy_version INTEGER NOT NULL,
             targets TEXT NOT NULL, stop_limit TEXT NOT NULL,
-            target_timeout INTEGER NOT NULL)''')
+            target_timeout INTEGER NOT NULL,
+            allocation_version INTEGER NOT NULL DEFAULT 1)''')
+        if 'allocation_version' not in {r[1] for r in self.db.execute('PRAGMA table_info(entry_exit_plans)')}:
+            self.db.execute('ALTER TABLE entry_exit_plans ADD COLUMN allocation_version INTEGER NOT NULL DEFAULT 1')
 
     def bind(self, entry_tag):
         """Bind exact admitted source and current reviewed exit limits, no defaults.
@@ -73,13 +77,16 @@ class EntryPlans:
         stop_limit = stop - tick * policy['limits']['stop_gap_ticks']
         if stop_limit <= 0:
             raise Refused('Reviewed stop gap exceeds trigger')
-        values = (entry_tag, source['source'], source['digest'], policy['version'],
-                  json.dumps([str(v) for v in targets]), str(stop_limit), policy['limits']['target_timeout_seconds'])
         old = self.db.execute('SELECT * FROM entry_exit_plans WHERE entry_tag=?', (entry_tag,)).fetchone()
+        version = old['allocation_version'] if old else ALLOCATION_VERSION
+        if type(version) is not int or version not in (1, ALLOCATION_VERSION):
+            raise Refused('Unknown target allocation version')
+        values = (entry_tag, source['source'], source['digest'], policy['version'],
+                  json.dumps([str(v) for v in targets]), str(stop_limit), policy['limits']['target_timeout_seconds'], version)
         if old and tuple(old) != values:
             raise Refused('Bound entry exit plan cannot change')
         self.monitor.bind_stop_limit(entry_tag, stop_limit)
-        self.db.execute('INSERT OR IGNORE INTO entry_exit_plans VALUES(?,?,?,?,?,?,?)', values)
+        self.db.execute('INSERT OR IGNORE INTO entry_exit_plans(entry_tag,source,source_digest,policy_version,targets,stop_limit,target_timeout,allocation_version) VALUES(?,?,?,?,?,?,?,?)', values)
         return dict(self.db.execute('SELECT * FROM entry_exit_plans WHERE entry_tag=?', (entry_tag,)).fetchone())
 
 
@@ -108,5 +115,6 @@ def handoff(monitor):
     with monitor.ledger.transaction():
         for plan in plans:
             manager.bind(plan['entry_tag'], targets=json.loads(plan['targets']),
-                         stop_limit=plan['stop_limit'], target_timeout=plan['target_timeout'])
+                         stop_limit=plan['stop_limit'], target_timeout=plan['target_timeout'],
+                         allocation_version=plan['allocation_version'] if 'allocation_version' in plan.keys() else 1)
     return manager

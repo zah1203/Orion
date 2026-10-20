@@ -7,8 +7,9 @@ OCO assumption, cancel-ack capacity release, price chasing or uncertain resend.
 from datetime import datetime, timezone
 import json
 
-from ..core import allocations
+from ..core import ALLOCATION_VERSION, allocations
 from .accounting import timestamp
+from .admission import strategy_stop
 from .ledger import Refused, amount
 from .monitor import ProtectionMonitor
 from .protection import check_conflicts
@@ -24,20 +25,23 @@ class ExitStrategy(ProtectionMonitor):
                 entry_tag TEXT PRIMARY KEY, targets TEXT NOT NULL, quantities TEXT NOT NULL,
                 stop_gap TEXT NOT NULL, target_timeout INTEGER NOT NULL,
                 stage INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT 'WATCH',
-                active_exit TEXT, requested_at TEXT);
+                active_exit TEXT, requested_at TEXT,
+                allocation_version INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS strategy_target_recoveries(
                 tag TEXT PRIMARY KEY, entry_tag TEXT NOT NULL, stage INTEGER NOT NULL,
                 filled INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS strategy_cancellations(
                 tag TEXT PRIMARY KEY, entry_tag TEXT NOT NULL);
         ''')
+        if 'allocation_version' not in {r[1] for r in self.db.execute('PRAGMA table_info(strategy_plans)')}:
+            self.db.execute('ALTER TABLE strategy_plans ADD COLUMN allocation_version INTEGER NOT NULL DEFAULT 1')
 
-    def bind(self, entry_tag, *, targets, stop_limit, target_timeout):
+    def bind(self, entry_tag, *, targets, stop_limit, target_timeout, allocation_version=None):
         """Bind once to final filled entry units; partial working entries wait.
 
-        Three lots allocate one per target; one lot exits at T3; two lots at T1/T3.
-        Stops trail to the entry limit at T1 and T1 at T2. For a zero-unit target,
-        reaching that price advances the stop; otherwise confirmed target fills do.
+        New plans sell one lot at T1, one at T2 and any remainder at T3. Confirmed
+        target fills trail the remainder to actual entry at T1 and T1 at T2.
+        Existing plans retain their allocation version and legacy stop behavior.
         """
         entry = self.ledger.get(entry_tag)
         body = json.loads(entry['body'])
@@ -56,13 +60,20 @@ class ExitStrategy(ProtectionMonitor):
             raise Refused('Targets must rise above entry limit')
         if not 0 < limit <= stop or limit % tick or any(p % tick for p in prices):
             raise Refused('Tick-aligned target and stop-limit policy required')
-        quantities = [n*terms['lot_size'] for n in allocations(entry['filled']//terms['lot_size'])]
-        values = (entry_tag, json.dumps([str(p) for p in prices]), json.dumps(quantities), str(stop-limit), target_timeout)
         with self.ledger.transaction():
-            old = self.db.execute('SELECT entry_tag,targets,quantities,stop_gap,target_timeout FROM strategy_plans WHERE entry_tag=?', (entry_tag,)).fetchone()
+            old = self.db.execute('SELECT entry_tag,targets,quantities,stop_gap,target_timeout,allocation_version FROM strategy_plans WHERE entry_tag=?', (entry_tag,)).fetchone()
+            version = allocation_version if allocation_version is not None else (
+                old['allocation_version'] if old else ALLOCATION_VERSION)
+            try:
+                quantities = [n*terms['lot_size'] for n in allocations(entry['filled']//terms['lot_size'], version=version)]
+            except ValueError as exc:
+                raise Refused(str(exc)) from None
+            if version == ALLOCATION_VERSION and not 0 < amount(entry['average']) <= amount(body['limit_price']):
+                raise Refused('Confirmed entry average required')
+            values = (entry_tag, json.dumps([str(p) for p in prices]), json.dumps(quantities), str(stop-limit), target_timeout, version)
             if old and tuple(old) != values:
                 raise Refused('Exit policy cannot change')
-            self.db.execute('INSERT OR IGNORE INTO strategy_plans(entry_tag,targets,quantities,stop_gap,target_timeout) VALUES(?,?,?,?,?)', values)
+            self.db.execute('INSERT OR IGNORE INTO strategy_plans(entry_tag,targets,quantities,stop_gap,target_timeout,allocation_version) VALUES(?,?,?,?,?,?)', values)
             self.ledger.pause()
 
     def _cancel(self, kind, row):
@@ -75,11 +86,7 @@ class ExitStrategy(ProtectionMonitor):
         return self._health('awaiting-broker', 'strategy-cancel-requested')
 
     def _stop(self, entry, plan, terms):
-        if plan['stage'] == 0:
-            return amount(terms['stop'])
-        if plan['stage'] == 1:
-            return amount(json.loads(entry['body'])['limit_price'])
-        return amount(json.loads(plan['targets'])[0])
+        return strategy_stop(entry, plan, terms)
 
     def _protect(self, entry, plan, terms, stops):
         trigger = self._stop(entry, plan, terms)

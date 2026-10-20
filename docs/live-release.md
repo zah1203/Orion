@@ -57,8 +57,11 @@ substitute for an integrated acceptance decision.
   subjected to a competing login. No production launcher constructs it yet.
 - A persisted exit coordinator for three targets and trailing stops. It reserves
   disjoint units, waits for confirmed stop cancellations before target placement,
-  and moves the stop to the entry limit after T1 and T1 after T2. One lot exits at
-  T3 with earlier trailing milestones; two lots allocate to T1/T3. Each cycle
+  and moves the remaining stop to actual entry (tick-rounded) after T1 and T1
+  after T2 for new plans. One lot exits at
+  T1; two lots allocate to T1/T2. New plans sell one lot at each of T1/T2
+  and any remainder at T3; legacy saved plans retain their version. See
+  [target policy and rollout](target-exits.md). Each cycle
   issues at most one command after reconciliation. Target limit orders are never
   counted as stop-loss coverage. Timeouts cancel once; ambiguous outcomes do not
   retry. The account wrapper can transfer final filled exposure from protection
@@ -253,11 +256,12 @@ restore stops. Confirmed stop cancellation followed by process/network failure c
 leave exposure uncovered; an unresolved prepared/send state requires operator
 review instead of a blind replacement. Production alert delivery is still required.
 
-Trailing uses the entry **limit** at T1 and target 1 at T2, retaining the explicitly
-bound stop-to-limit gap. This is not a promise of break-even after charges. A quote
+New-plan trailing uses the confirmed entry **average**, rounded down to the tick
+and never below the original stop, at T1; then target 1 at T2. Legacy plans retain
+the entry-limit rule. Both retain the explicitly bound stop-to-limit gap. This is not a promise of break-even after charges. A quote
 at/below the limit of a still-working stop raises a review incident and does not
 reprice or submit a market order. The operator must review this gap policy before
-Live activation. Strategy tests cover T1/T2/T3, one-lot milestones, partial fills
+Live activation. Strategy tests cover T1/T2/T3, one-lot T1 exits, partial fills
 racing cancellation, stale quotes, target timeout, restart, unknown sends and
 capacity/price conflicts. They use a synthetic SDK and place no real orders.
 

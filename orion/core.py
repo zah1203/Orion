@@ -154,16 +154,24 @@ def resolve(signal, master, now, allow_synthetic=False):
     return found[0].copy()
 
 
-def allocations(n):
-    if n <= 0:
+ALLOCATION_VERSION = 2
+
+
+def allocations(n, *, version=ALLOCATION_VERSION):
+    """Freeze whole-lot exits at entry; version 1 is only for saved Live plans."""
+    if type(n) is not int or n <= 0:
         raise ValueError("Lots must be positive")
-    if n == 1:
-        return [0, 0, 1]
-    if n == 2:
-        return [1, 0, 1]
-    a = n // 3
-    b = (n - a) // 2
-    return [a, b, n - a - b]
+    if type(version) is not int or version not in (1, ALLOCATION_VERSION):
+        raise ValueError("Unknown target allocation version")
+    if version == 1:
+        if n == 1:
+            return [0, 0, 1]
+        if n == 2:
+            return [1, 0, 1]
+        a = n // 3
+        b = (n - a) // 2
+        return [a, b, n - a - b]
+    return [1, int(n >= 2), max(0, n - 2)]
 
 
 class Engine:
@@ -503,6 +511,8 @@ class Engine:
                     stop=p["stop"],
                     price=str(bid),
                 )
+                if not p["remaining"]:
+                    break
 
     def _sell(self, s, p, lots, price, day):
         if not 0 < lots <= p["remaining"]:

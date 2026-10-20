@@ -44,14 +44,16 @@ Whole-lot exit allocation:
 
 | Starting lots | Sell at T1 | Sell at T2 | Sell at T3 |
 |---:|---:|---:|---:|
-| 1 | 0 | 0 | 1 |
-| 2 | 1 | 0 | 1 |
+| 1 | 1 | 0 | 0 |
+| 2 | 1 | 1 | 0 |
 | 3 | 1 | 1 | 1 |
 | 4 | 1 | 1 | 2 |
-| 5 | 1 | 2 | 2 |
-| 6 | 2 | 2 | 2 |
+| 5 | 1 | 1 | 3 |
+| 6 | 1 | 1 | 4 |
 
-A one-lot position still moves its stop at T1 and T2. A stop at entry is not guaranteed net break-even after fees/slippage. All fills are simulated in full at observed bid/ask; liquidity, partial broker fills, queue position and actual statutory charges are not modeled.
+A new one-lot position closes fully at T1; two lots close one each at T1 and T2. Larger positions sell one lot at T1, one at T2 and the remainder at T3. Stops move only while lots remain. Saved open positions retain their original allocations; see [target policy and rollout](docs/target-exits.md).
+
+A stop at entry is not guaranteed net break-even after fees/slippage. All paper fills are simulated in full at observed bid/ask; liquidity, partial broker fills, queue position and actual statutory charges are not modeled.
 
 ## Configuration decisions
 

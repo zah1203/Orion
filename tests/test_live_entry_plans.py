@@ -67,7 +67,7 @@ class EntryPlanTests(unittest.TestCase):
     def test_restart_then_revocation_keeps_protection_and_final_fill_handoff(self):
         ledger = self.prepare()
         self.plans.bind(self.tag)
-        ledger.db.execute("UPDATE intents SET status='PARTIAL',filled=10")
+        ledger.db.execute("UPDATE intents SET status='PARTIAL',filled=10,average='100'")
         self.assertIsNone(handoff(self.monitor))
         with self.assertRaises(Refused): self.plans.bind(self.tag)
         ledger.close()
@@ -79,7 +79,7 @@ class EntryPlanTests(unittest.TestCase):
         manager = handoff(monitor)
         self.assertIsNotNone(manager)
         plan = ledger.db.execute('SELECT * FROM strategy_plans').fetchone()
-        self.assertEqual(json.loads(plan['quantities']), [0, 0, 10])
+        self.assertEqual(json.loads(plan['quantities']), [10, 0, 0])
         self.assertEqual(plan['stop_gap'], '0.05')
         self.assertIsNotNone(handoff(manager))
         self.assertFalse(ledger.db.execute('SELECT 1 FROM broker_commands').fetchone())

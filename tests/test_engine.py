@@ -73,15 +73,14 @@ class EngineTests(unittest.TestCase):
         self.quote(220)
         self.assertEqual(self.pos()["status"], "CLOSED")
 
-    def test_one_lot_trails_without_partial(self):
+    def test_one_lot_closes_at_first_target(self):
         self.cfg["max_lots"] = 1
         self.enter()
-        self.quote(180)
-        self.assertEqual((self.pos()["remaining"], self.pos()["stop"]), (1, "170.5"))
-        self.quote(200)
-        self.assertEqual(self.pos()["stop"], "180")
-        self.quote(179)
-        self.assertEqual(self.pos()["status"], "CLOSED")
+        out = self.quote(180)
+        self.assertEqual((self.pos()["remaining"], self.pos()["status"]), (0, "CLOSED"))
+        self.assertEqual([(e["target"], e["sold_lots"]) for e in out], [(1, 1)])
+        self.assertEqual(self.quote(200), [])
+        self.assertEqual(self.quote(179), [])
 
     def test_gap_hits_all_targets_once(self):
         self.enter()
@@ -306,7 +305,7 @@ class EngineTests(unittest.TestCase):
     def test_whole_lot_allocations(self):
         self.assertEqual(
             [allocations(n) for n in range(1, 7)],
-            [[0, 0, 1], [1, 0, 1], [1, 1, 1], [1, 1, 2], [1, 2, 2], [2, 2, 2]],
+            [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 1, 2], [1, 1, 3], [1, 1, 4]],
         )
 
 
