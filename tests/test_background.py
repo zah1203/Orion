@@ -232,6 +232,16 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("123456", json.dumps(store.credentials(uid)))
 
     async def test_feed_failures_do_not_stop_listener_and_new_session_retries(self):
+        await self.exercise_feed_failure()
+
+    async def test_silent_open_socket_reconnects_with_bounded_retries(self):
+        await self.exercise_feed_failure(stall=True)
+
+    async def exercise_feed_failure(self, stall=False):
+        from orion.core import Engine
+        from orion.feed_health import FeedHealth
+        import itertools
+
         with tempfile.TemporaryDirectory() as root:
             store = Store(root, Fernet.generate_key())
             cfg = defaults()
@@ -244,6 +254,15 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
             save(store, uid, creds, values)
             bg = Background(store, uid, Path(root) / "missing.json")
             handlers, attempts = [], []
+            position = {'status': 'OPEN', 'remaining': 2,
+                        'contract': {'segment': 'mcx_fo', 'token': '123', 'symbol': 'TEST'}}
+            if stall:
+                engine = Engine(str(store.account_dir(uid) / 'paper.db'), cfg, bg.master)
+                with engine.db:
+                    state = engine.state()
+                    state['positions']['-100111:1'] = position
+                    engine.db.execute('UPDATE state SET body=? WHERE id=1', (json.dumps(state),))
+                engine.db.close()
 
             class Telegram:
                 async def connect(self):
@@ -266,10 +285,27 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
 
             class Websocket:
                 async def __aenter__(self):
-                    raise RuntimeError("SECRET-FEED-ERROR")
+                    if not stall:
+                        raise RuntimeError("SECRET-FEED-ERROR")
+                    return self
 
                 async def __aexit__(self, *args):
                     pass
+
+                async def subscribe_exchange(self):
+                    pass
+
+                async def subscribe_scrips(self, tokens):
+                    pass
+
+                async def unsubscribe_scrips(self, tokens):
+                    pass
+
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    await asyncio.Future()
 
             class Broker:
                 def __init__(self, **kwargs):
@@ -302,8 +338,11 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
                 patch("telethon.TelegramClient", return_value=Telegram()),
                 patch("neo_api_client.NeoAPI", Broker),
                 patch("orion.runtime.asyncio.sleep", fast_sleep),
+                patch("orion.runtime.FeedHealth",
+                      side_effect=lambda age: FeedHealth(age, clock=lambda: next(ticks))),
                 redirect_stdout(output),
             ):
+                ticks = itertools.count(0, 31)
                 task = asyncio.create_task(
                     serve(
                         cfg,
@@ -337,6 +376,11 @@ class RunningWorker(unittest.IsolatedAsyncioTestCase):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
             self.assertNotIn("SECRET", output.getvalue())
+            if stall:
+                self.assertIn('FEED_STALL_RECONNECT', output.getvalue())
+                engine = Engine(str(store.account_dir(uid) / 'paper.db'), cfg, bg.master)
+                self.assertEqual(engine.state()['positions']['-100111:1'], position)
+                engine.db.close()
 
     async def test_stale_catalogue_keeps_market_status_for_existing_position_quotes(self):
         from unittest.mock import AsyncMock

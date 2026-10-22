@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from .core import Engine, IST, dumps
 from .subscriptions import Subscriptions, active_tokens
+from .feed_health import FeedHealth
 
 
 def credentials():
@@ -154,8 +155,10 @@ async def serve(
                     "INSERT OR IGNORE INTO source_events VALUES(?,?,?)",
                     (event["event_id"], now.isoformat(), dumps(event)),
                 )
-            for result in engine.process(event, now):
+            results = engine.process(event, now)
+            for result in results:
                 print(dumps(result), flush=True)
+            return results
 
     async def message(event):
         if event.message.date < boot and not event.message.edit_date:
@@ -211,6 +214,7 @@ async def serve(
         async with broker.create_websocket(**options) as ws:
             await ws.subscribe_exchange()
             subscriptions = Subscriptions(ws, WsToken)
+            health = FeedHealth(config['quote_max_age_seconds'])
             if background:
                 background.status(broker="connected")
 
@@ -219,11 +223,23 @@ async def serve(
                     removed = await subscriptions.sync(engine.state()["positions"])
                     for segment, token in removed:
                         last_quote.pop(segment + ":" + token, None)
+                    health.sync(subscriptions.current, market_status)
+                    overdue = health.overdue()
+                    if background:
+                        status = 'stale' if overdue else 'connected'
+                        if background.state.get('broker') != status:
+                            background.status(broker=status)
+                    stalled = health.overdue(reconnect=True)
+                    if stalled:
+                        print(dumps({'event': 'FEED_STALL_RECONNECT',
+                                     'contracts': [dict(segment=s, token=t) for s, t in stalled]}),
+                              flush=True)
+                        raise RuntimeError('Active contract feed stalled')
                     await asyncio.sleep(0.5)
 
             async with asyncio.TaskGroup() as tasks:
                 tasks.create_task(reconcile())
-                await consume(ws)
+                await consume(ws, health)
                 raise RuntimeError("Market feed ended; authenticate before restarting")
 
     async def broker_loop():
@@ -270,7 +286,7 @@ async def serve(
                 background.status(broker="disconnected")
             await asyncio.sleep(30)
 
-    async def consume(ws):
+    async def consume(ws, health):
         async for m in ws:
             if isinstance(m, SFeedMarketStatus):
                 market_status[m.exchange_segment] = int(m.status_code) in (1, 4)
@@ -307,10 +323,7 @@ async def serve(
                             ):
                                 p["status"] = "CANCELLED"
                         engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
-                last_quote[k] = now
-                if background:
-                    background.state["last_quote_at"] = now.isoformat()
-                ingest(
+                results = ingest(
                     dict(
                         type="quote",
                         event_id=str(uuid.uuid4()),
@@ -325,6 +338,10 @@ async def serve(
                         market_open=market_status.get(m.exchange_segment, False),
                     )
                 )
+                if health.accepted((m.exchange_segment, str(m.instrument_token)), results):
+                    last_quote[k] = now
+                    if background:
+                        background.state["last_quote_at"] = now.isoformat()
 
     async def telegram_loop():
         await telegram.run_until_disconnected()
