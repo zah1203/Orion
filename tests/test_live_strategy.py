@@ -201,27 +201,19 @@ class StrategyTests(unittest.TestCase):
         self.cycle('140')
         self.assertEqual(len(self.session.sdk.calls), before)
 
-    def test_one_lot_trails_at_zero_allocation_targets_then_sells_only_at_t3(self):
-        # Set up an independent one-lot scenario, without changing any real data.
+    def test_one_lot_closes_only_at_t1(self):
         self.ledger.db.execute('DELETE FROM strategy_plans')
         self.ledger.db.execute('UPDATE intents SET filled=1,body=replace(body,\'"quantity": 3\',\'"quantity": 1\')')
-        self.session.sdk.entry.update(qty=1,fldQty=1)
+        self.session.sdk.entry.update(qty=1, fldQty=1)
         self.strategy.bind(self.tag, targets=['110','120','130'], stop_limit='89.95', target_timeout=10)
-        self.cycle()
-        self.assertEqual(self.cycle('111')['action'], 'trailing-milestone')
-        self.cycle('111'); self.session.sdk.stops[-1]['ordSt'] = 'cancelled'
-        self.cycle('111')
-        self.assertEqual(self.session.sdk.stops[-1]['trgPrc'], '100')
-        self.assertEqual(self.cycle('121')['action'], 'trailing-milestone')
-        self.cycle('121'); self.session.sdk.stops[-1]['ordSt'] = 'cancelled'
-        self.cycle('121')
-        self.assertEqual(self.session.sdk.stops[-1]['trgPrc'], '110')
-        self.cycle('131'); self.cycle('131')
-        self.session.sdk.stops[-1]['ordSt'] = 'cancelled'
-        self.assertEqual(self.cycle('131')['action'], 'target-requested')
-        self.assertEqual(sum(r['prcTp'] == 'L' for r in self.session.sdk.stops), 1)
-        self.assertEqual(self.session.sdk.stops[-1]['qty'], 1)
-        self.assertEqual(self.session.sdk.stops[-1]['prc'], '130')
+        target = self.to_target()
+        self.assertEqual((target['qty'], target['prc']), (1, '110'))
+        target.update(ordSt='complete', fldQty=1, avgPrc='110')
+        self.assertEqual(self.cycle('111')['exposure'], 0)
+        before = len(self.session.sdk.calls)
+        self.cycle('140')
+        self.assertEqual(len(self.session.sdk.calls), before)
+        self.assertEqual(self.ledger.db.execute('SELECT phase FROM strategy_plans').fetchone()[0], 'DONE')
 
     def test_accepted_target_timeout_is_unknown_and_never_retried(self):
         self.cycle(); self.cycle('111'); self.cycle('111')

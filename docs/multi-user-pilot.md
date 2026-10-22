@@ -43,7 +43,7 @@ Do not commit key files or runtime data. Encryption keys must be backed up priva
 1. Sign in as Alice and Bob in separate browser profiles.
 2. Set Alice to a maximum of 3 lots and Bob to 1. Give each account its permitted channel IDs and instruments. Use **Pause and edit settings**, then save while the worker stays online. Changes require paused entries and no open/pending paper trades.
 3. Run **Try your risk settings** for each user. This disposable synthetic NIFTY example uses that user's sizing limits; it does not submit orders or alter the real paper ledger, channels or entry-enabled flag.
-4. Observe Alice's partial exits and Bob's one-lot stop movements. The example uses fictional multipliers and a synthetic price sequence; this is a software demonstration, not strategy performance.
+4. Observe Alice's partial exits and Bob's one-lot exit at T1. The example uses fictional multipliers and a synthetic price sequence; this is a software demonstration, not strategy performance.
 5. Save API details if you intend to connect real inputs. The UI returns only saved-field names, never credential values. Saving credentials is separate from account authentication.
 
 An account starts with no configured channels. Each selected instrument group needs its channel ID. The sample supports exact NIFTY/BANKNIFTY and MCX product names. Use only channels whose terms allow the intended processing; account membership alone does not establish permission.

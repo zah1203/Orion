@@ -1,7 +1,28 @@
 """Additional admission requires every existing position to have observed stops."""
 import json
+from decimal import ROUND_FLOOR
 
+from ..core import ALLOCATION_VERSION
 from .ledger import Refused, amount
+
+
+def strategy_stop(entry, plan, terms):
+    """One stop rule for execution and admission; old saved plans stay unchanged."""
+    version = plan['allocation_version'] if 'allocation_version' in plan.keys() else 1
+    if type(version) is not int or version not in (1, ALLOCATION_VERSION):
+        raise Refused('Unknown target allocation version')
+    if plan['stage'] == 0:
+        return amount(terms['stop'])
+    if plan['stage'] == 1:
+        limit = amount(json.loads(entry['body'])['limit_price'])
+        if version == 1:
+            return limit
+        average, tick = amount(entry['average']), amount(terms['tick'])
+        if not 0 < average <= limit or tick <= 0:
+            raise Refused('Confirmed entry average and tick required')
+        rounded = (average / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+        return max(amount(terms['stop']), rounded)
+    return amount(json.loads(plan['targets'])[0])
 
 
 def protected_book(ledger):
@@ -31,9 +52,7 @@ def protected_book(ledger):
         terms = db.execute('SELECT * FROM execution_terms WHERE tag=?', (entry['tag'],)).fetchone()
         if not plan or not terms or plan['phase'] != 'WATCH' or plan['active_exit'] or not 0 <= plan['stage'] < 3:
             raise Refused('Position exit transition blocks additional entries')
-        stop = (amount(terms['stop']) if plan['stage'] == 0 else
-                amount(json.loads(entry['body'])['limit_price']) if plan['stage'] == 1 else
-                amount(json.loads(plan['targets'])[0]))
+        stop = strategy_stop(entry, plan, terms)
         if (not working or any(r['status'] not in ('OPEN', 'PARTIAL') or not r['broker_id'] or
                                amount(r['trigger']) != stop for r in working) or
                 sum(r['quantity']-r['filled'] for r in working) != remaining):

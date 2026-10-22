@@ -23,7 +23,8 @@ class PortfolioMonitor(ProtectionMonitor):
         with self.ledger.transaction():
             for plan in rows:
                 self.exits.bind(plan['entry_tag'], targets=json.loads(plan['targets']),
-                                stop_limit=plan['stop_limit'], target_timeout=plan['target_timeout'])
+                                stop_limit=plan['stop_limit'], target_timeout=plan['target_timeout'],
+                                allocation_version=plan['allocation_version'] if 'allocation_version' in plan.keys() else 1)
 
     def cycle(self, *, entries_allowed=False, marks=None):
         try:
