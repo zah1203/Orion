@@ -120,7 +120,26 @@ sudo journalctl -u orion -f
 
 The helper asks for a current Kotak TOTP without echoing it. The service consumes/deletes the short-lived `/run/orion/totp` file. A successful `systemctl start` alone does not prove authentication; inspect logs for fresh data and parsed calls. Feed/authentication failure does not trigger an automatic restart with an expired code.
 
-At the start of each trading day: refresh verified contracts, inspect any simulated positions left open during outages, then authenticate and start. Pending signals are cancelled on restart. Open simulated positions persist and may exit only on the next valid open-market quote. There is no automatic morning scheduler or session renewal in this release. Watchdog logs `FEED_STALE`; no external alert delivery is configured.
+At the start of each trading day: refresh verified contracts, inspect any simulated positions left open during outages, then authenticate and start. Pending signals are cancelled on restart. Open simulated positions persist and may exit only on the next valid open-market quote. There is no automatic morning scheduler or session renewal in this release.
+
+The paper feed tracks accepted quotes separately for each active segment/token.
+Rejected stale, invalid and out-of-order quotes do not refresh health. After the
+configured quote age, an active contract without accepted quotes marks the
+background broker health stale, blocking new entries through the existing health
+gate and exposing the incident to the opt-in attention monitor. After the larger
+of 60 seconds or three quote-age windows, the socket is closed and the background
+worker reconnects and rebuilds active subscriptions. An absent first quote or
+unknown market status is also monitored; explicitly closed markets do not exhaust
+reconnect attempts. No active positions means no quote-stall reconnect.
+
+Recovery retains the existing three-failure budget per saved session version and
+30-second retry delay. Exhaustion requires operator reauthentication; it does not
+prove the session expired. Telegram remains connected. Open paper positions and
+their stops/allocations are preserved; pending entries are cancelled on reconnect.
+The standalone foreground worker exits on a sustained stall for operator review.
+This is bounded recovery, not a fill guarantee: it cannot reconstruct missed
+targets or retroactively change P&L, and never accepts stale quotes to simulate an
+exit. Live execution and target allocation policies are unchanged.
 
 Stop using `sudo systemctl stop orion`. **Stopping does not close a simulated position** and there are no broker orders to close. This release is never a real-position risk manager.
 
