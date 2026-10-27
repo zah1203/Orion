@@ -411,14 +411,22 @@ class Engine:
                     continue
                 spread_ok = (ask - bid) / ask <= dec(self.cfg["max_spread_fraction"])
                 active = sum(v["status"] == "OPEN" for v in s["positions"].values())
-                if (
-                    not spread_ok
-                    or active >= self.cfg["max_open_positions"]
-                    or dec(day["pnl"]) <= -dec(self.cfg["daily_loss_limit"])
-                    or day["entries"] >= self.cfg["max_entries_per_day"]
-                ):
+                blockers = []
+                if not spread_ok:
+                    blockers.append("Bid–ask spread exceeds limit")
+                if active >= self.cfg["max_open_positions"]:
+                    blockers.append("Maximum open positions reached")
+                if dec(day["pnl"]) <= -dec(self.cfg["daily_loss_limit"]):
+                    blockers.append("Daily realized-loss limit reached")
+                if day["entries"] >= self.cfg["max_entries_per_day"]:
+                    blockers.append("Daily entry limit reached")
+                if blockers:
                     p["status"] = "REJECTED"
-                    emit("ENTRY_LIMIT_REJECTED", signal_id=key)
+                    emit("ENTRY_LIMIT_REJECTED", signal_id=key, blockers=blockers,
+                         observed=dict(bid=str(bid), ask=str(ask), spread_fraction=str((ask-bid)/ask),
+                                       open_positions=active, daily_pnl=str(day["pnl"]), entries=day["entries"]),
+                         limits={k: self.cfg[k] for k in ("max_spread_fraction", "max_open_positions",
+                                                        "daily_loss_limit", "max_entries_per_day")})
                     continue
                 multiplier = dec(c["premium_multiplier"])
                 fee = dec(self.cfg["paper_fee_per_order"])
@@ -479,6 +487,7 @@ class Engine:
                 day["pnl"] = str(dec(day["pnl"]) - fee)
                 day["entries"] += 1
                 emit("PAPER_BUY", signal_id=key, lots=lots, price=str(ask), stop=p["stop"],
+                     targets=p["targets"], channel_name=self.cfg["channels"].get(key.rsplit(":", 1)[0], {}).get("name"),
                      pnl=p["pnl"], realized_delta=str(-fee), fee=str(fee), product=c["product"], pnl_date_ist=today)
                 continue
             if not e.get("market_open", False):
@@ -488,6 +497,7 @@ class Engine:
             regular_cutoff = not p.get("overnight") and cutoff
             if p.get("exit_requested") or expiry_cutoff or overnight_cutoff or regular_cutoff or bid <= dec(p["stop"]):
                 before_pnl = dec(p["pnl"])
+                sold_lots = p["remaining"]
                 self._sell(s, p, p["remaining"], bid, day)
                 emit(
                     "PAPER_EXIT",
@@ -500,6 +510,7 @@ class Engine:
                         else "STOP"
                     ),
                     price=str(bid),
+                    sold_lots=sold_lots, remaining=p["remaining"], stop=p["stop"],
                     pnl=p["pnl"], realized_delta=str(dec(p["pnl"])-before_pnl),
                     fee=str(self.cfg["paper_fee_per_order"]), product=c["product"], pnl_date_ist=today,
                 )

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 type Data = Record<string, any>;
 const money = (n: unknown) =>
   n == null
@@ -223,7 +224,7 @@ export function OpenPreview({
           <Pressable
             key={p.signal_id}
             accessibilityRole="button"
-            onPress={onPress}
+            onPress={() => router.push({ pathname: "/trade", params: { signal: p.signal_id } })}
           >
             <Panel>
               <View style={s.row}>

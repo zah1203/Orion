@@ -9,6 +9,7 @@ import {
   AppState,
 } from "react-native";
 import { api } from "../lib/api";
+import { router } from "expo-router";
 type Data = Record<string, any>;
 const money = (v: unknown) =>
   v === null || v === undefined
@@ -362,7 +363,8 @@ export default function Performance({ userId }: { userId?: string }) {
           )}
           {showTrades &&
             data.trades.map((t: Data) => (
-              <View key={t.signal_id} style={s.detail}>
+              <Pressable key={t.signal_id} style={s.detail} accessibilityRole="button"
+                onPress={() => router.push({ pathname: "/trade", params: { signal: t.signal_id, ...(userId ? { userId } : {}) } })}>
                 <Text style={s.text}>{t.symbol}</Text>
                 <Text style={s.note}>
                   {t.status} · Realized within selection
@@ -372,7 +374,8 @@ export default function Performance({ userId }: { userId?: string }) {
                 >
                   {money(t.period_realized)}
                 </Text>
-              </View>
+                <Text style={s.note}>Compare execution & Telegram →</Text>
+              </Pressable>
             ))}
           <Text style={s.note}>
             Weeks start Monday. All reporting dates use India time. Balance

@@ -406,6 +406,25 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
             raise HTTPException(404,"User not found")
         return performance_result(uid,period,instrument,start,end,group_by)
 
+    def trade_detail_result(uid, signal_id, offset):
+        try:
+            return accounts.trade_details(uid, signal_id, offset)
+        except LookupError:
+            raise HTTPException(404, "Trade not found") from None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @app.get("/api/paper-trade")
+    def own_trade(request: Request, signal_id: str, offset: int = 0):
+        return trade_detail_result(identity(request)["user_id"], signal_id, offset)
+
+    @app.get("/api/admin/users/{uid}/paper-trade")
+    def user_trade(uid: str, request: Request, signal_id: str, offset: int = 0):
+        owner(request)
+        if uid not in {u["id"] for u in store.users()}:
+            raise HTTPException(404, "User not found")
+        return trade_detail_result(uid, signal_id, offset)
+
     @app.get("/api/activity")
     def own_activity(request: Request, before: int | None = None):
         from .analytics import activity

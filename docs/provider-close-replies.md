@@ -31,3 +31,24 @@ python3 scripts/inspect_paper_signal.py --db /path/to/paper.db --signal=-1003243
 
 The diagnostic opens SQLite read-only and prints only the requested position and
 its audit decisions. A missing row alone does not establish a software defect.
+
+## In-app comparison
+
+Tap a Paper trade in Trades, an open-position preview, or the performance trade
+breakdown to open execution and Telegram evidence. Signal Activity also links to
+the same screen for rejected/unfilled signals. Owner views preserve the selected
+account; the API independently enforces account isolation and owner permissions.
+
+The screen shows entry, initial/latest stop, targets, execution prices and lots,
+fees, cumulative realized P&L, and final exit reason. A STOP exit does not imply a
+losing trade. The timeline combines ledger events with retained original Telegram
+messages, edits and reply chains from the same channel, including provider and
+receipt timestamps in IST. Telegram text is evidence of what the provider said,
+not a simulated fill. Unlinked posts and media contents are not reconstructed.
+Refresh updates the view; Load more retrieves further timeline events.
+
+New entry-limit rejections record all triggered blockers and the observed bid,
+ask, spread, daily P&L, entry count and open-position count alongside the limits
+at that moment. Older generic rejections explicitly show that their exact reason
+was not recorded; current settings are never substituted as historical evidence.
+Existing ledgers and source messages are read without a migration or P&L rewrite.

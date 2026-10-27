@@ -326,6 +326,20 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(out[0]["event"], "EXIT_REQUIRES_REVIEW")
         self.assertFalse(self.pos()["exit_requested"])
 
+    def test_entry_rejection_records_all_triggered_limits(self):
+        self.cfg["max_entries_per_day"] = 0
+        self.cfg["max_open_positions"] = 0
+        self.cfg["daily_loss_limit"] = "0"
+        self.cfg["max_spread_fraction"] = "0.0001"
+        self.msg()
+        self.quote(169)
+        out = self.quote(170)
+        event = next(e for e in out if e["event"] == "ENTRY_LIMIT_REJECTED")
+        self.assertEqual(len(event["blockers"]), 4)
+        self.assertEqual(event["observed"]["entries"], 0)
+        self.assertEqual(event["limits"]["max_entries_per_day"], 0)
+        self.assertEqual(self.pos()["status"], "REJECTED")
+
     def test_reply_close_does_not_reopen_closed_position(self):
         self.enter()
         self.quote(140)
