@@ -70,6 +70,16 @@ def parse_exit(text, source_time):
     return contract_identity(t, source_time)
 
 
+def is_reply_close(text):
+    """Accept only unambiguous full-close templates, never quoted fill prices."""
+    t = text.upper().strip().lstrip("❌⚠️ ").strip()
+    return bool(re.fullmatch(
+        r"(?:CLOSE (?:THIS )?POSITION|EXIT NOW)\s*[!.]?"
+        r"(?:\s*\|\s*(?:PARTIAL )?(?:LOSS|PROFIT) BOOKED FROM "
+        r"[\d,.]+\s*→\s*[\d,.]+)?", t
+    ))
+
+
 def parse_signal(text, source_time):
     """Only complete BUY signals; no implicit link to an earlier contract."""
     t = text.upper().replace(",", "")
@@ -258,19 +268,26 @@ class Engine:
             closing = parse_exit(e["text"], e["source_time"])
         except ValueError:
             closing = None
-        if closing:
+        reply_close = is_reply_close(e["text"])
+        if closing or reply_close:
             matches = []
+            reply = e.get("reply_to")
+            reply_key = f"{e['channel_id']}:{reply}" if reply is not None else None
             for signal_id, position in s["positions"].items():
+                if reply_key is not None and signal_id != reply_key:
+                    continue
+                if closing is None and reply_key is None:
+                    continue
                 if signal_id.split(":")[0] != str(e["channel_id"]):
                     continue
                 if position["status"] not in ("PENDING", "OPEN"):
                     continue
-                if any(
+                if closing and any(
                     position.get(field) != closing[field]
                     for field in ("product", "strike", "option_type")
                 ):
                     continue
-                if closing["expiry"] and position["contract"]["expiry"] != closing["expiry"]:
+                if closing and closing["expiry"] and position["contract"]["expiry"] != closing["expiry"]:
                     continue
                 matches.append((signal_id, position))
             if len(matches) != 1:
