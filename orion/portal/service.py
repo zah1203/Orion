@@ -7,6 +7,7 @@ from contextlib import closing
 from ..core import Engine, dumps, stamp, dec
 from .reporting import report
 from .analytics import enrich
+from . import paper_periods
 
 
 class Accounts:
@@ -44,7 +45,15 @@ class Accounts:
             except (sqlite3.Error, ValueError, TypeError):
                 raise ValueError('Paper ledger cannot be reconciled; review required') from None
         try:
-            return reconcile(state, records, user['settings']['paper_cash'])
+            period = paper_periods.metadata(state)
+            records = [r for r in records if r['seq'] > period['start_seq']]
+            result = reconcile(paper_periods.view(state), records,
+                               period.get('starting_cash', user['settings']['paper_cash']))
+            result['paper_period'] = {k: v for k, v in period.items() if k != 'excluded_signals'}
+            if period['id'] != 'legacy':
+                result['starting_cash_basis'] = 'paper-period-starting-balance'
+                result['note'] = 'Current paper period only. ' + result['note'].replace('configured starting cash', 'period starting cash')
+            return result
         except (ValueError, KeyError, TypeError, ArithmeticError):
             raise ValueError('Paper ledger cannot be reconciled; review required') from None
 
@@ -62,10 +71,12 @@ class Accounts:
                         state = json.loads(row[0])
                     history = [
                         {"at": r[0], "event": r[1], **json.loads(r[2])}
-                        for r in db.execute("SELECT at,event,body FROM audit ORDER BY seq DESC LIMIT 100")
+                        for r in db.execute("SELECT at,event,body FROM audit WHERE seq>=? ORDER BY seq DESC LIMIT 100",
+                                          (paper_periods.metadata(state)["start_seq"],))
                     ]
                 finally:
                     db.close()
+            state = paper_periods.view(state)
             return {
                 **user,
                 "credentials": self.store.credential_status(uid),
@@ -78,20 +89,40 @@ class Accounts:
                 "ledger_started": path.exists(),
             }
 
-    def performance(self, uid, **filters):
+    def performance(self, uid, paper_period='current', **filters):
         from .performance import performance
         with self.store.lock(uid):
-            user=self.store.user(uid)
-            path=self.store.account_dir(uid)/"paper.db"
-            state={"cash":user["settings"]["paper_cash"],"positions":{},"days":{}}
-            records=[]
+            user = self.store.user(uid)
+            path = self.store.account_dir(uid) / "paper.db"
+            state = {"cash": user["settings"]["paper_cash"], "positions": {}, "days": {}}
+            records = []
+            selected = paper_periods.metadata(state)
+            options, archived = [selected], False
             if path.exists():
                 with closing(sqlite3.connect(path)) as db:
                     db.execute("BEGIN")
-                    row=db.execute("SELECT body FROM state WHERE id=1").fetchone()
-                    if row:state=json.loads(row[0])
-                    records=[dict(at=r[0],event=r[1],body=json.loads(r[2])) for r in db.execute("SELECT at,event,body FROM audit WHERE event IN ('PAPER_BUY','PAPER_EXIT','TARGET_REACHED') ORDER BY seq")]
-            return performance(state,records,user["settings"]["quote_max_age_seconds"],**filters)
+                    row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
+                    if row:
+                        state = json.loads(row[0])
+                    state, records, selected, options, archived = paper_periods.select(db, state, paper_period)
+            elif paper_period not in ('current', 'legacy'):
+                raise ValueError('Unknown paper testing period')
+            result = performance(state, records, user["settings"]["quote_max_age_seconds"], **filters)
+            result.update(paper_period=selected, paper_periods=options, archived=archived)
+            return result
+
+    def start_paper_period(self, uid, amount, label, expected_period):
+        with self.store.lock(uid):
+            if self.store.user(uid)["enabled"]:
+                raise ValueError('Pause entries before starting a new paper period')
+            engine = self.engine(uid, {"synthetic": False, "contracts": []})
+            try:
+                with engine.db:
+                    engine.db.execute('BEGIN IMMEDIATE')
+                    return paper_periods.start(engine.db, engine.state(), amount, label,
+                                               expected_period, self.store.user(uid)['settings'])
+            finally:
+                engine.db.close()
 
     def active_positions(self, uid):
         path = self.store.account_dir(uid) / "paper.db"
