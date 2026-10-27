@@ -267,6 +267,22 @@ class EngineTests(unittest.TestCase):
             },
         )
 
+    def test_spaced_bank_nifty_keeps_product_and_strike(self):
+        text = "BANK NIFTY 27 OCT 54600 PE\nBuy above 460\nTARGET: 480/550/600\nSL: 420"
+        parsed = parse_signal(text, "2026-10-23T04:32:09+00:00")
+        self.assertEqual((parsed["product"], parsed["strike"], parsed["expiry"]),
+                         ("BANKNIFTY", "54600", "2026-10-27"))
+        typo = parse_signal(text.replace("54600", "5400"), "2026-10-23T04:32:09+00:00")
+        self.assertEqual(typo["strike"], "5400")
+        with self.assertRaisesRegex(ValueError, "No exact contract"):
+            resolve(typo, {"as_of":"2026-10-23", "contracts":[]}, stamp("2026-10-23T04:32:09+00:00"))
+
+    def test_spaced_bank_nifty_exit_and_plain_nifty(self):
+        exit_call = parse_exit("Stoploss hit for BANK NIFTY 27 OCT 54600 PE. CLOSE THIS POSITION!",
+                               "2026-10-23T04:32:09+00:00")
+        self.assertEqual(exit_call["product"], "BANKNIFTY")
+        self.assertEqual(parse_signal(SIGNAL, TIME)["product"], "NIFTY")
+
     def test_reply_close_uses_next_bid_not_announced_price(self):
         self.enter()
         out = self.msg(text="❌ Close Position | Partial Loss Booked from 1242.00 → 1122.50",
