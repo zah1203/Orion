@@ -23,21 +23,22 @@ export default function Capital({ uid }: { uid?: string }) {
   const text = { color: "#d6e5f3", fontSize: 15, lineHeight: 23 };
   return <Panel>
     <Text style={{ ...text, fontSize: 20, fontWeight: "700" }}>Paper balance explained</Text>
-    <Text style={text}>Setting cash to ₹3 lakh preserves earlier profits in history. It does not add those profits on top of ₹3 lakh.</Text>
+    <Text style={text}>A balance adjustment replaces available cash and keeps P&L. Starting a new paper period archives earlier results and begins separate totals.</Text>
     <Action label={busy ? "Checking…" : report ? "Refresh balance check" : "Check balance and history"}
       disabled={busy} onPress={check} />
     {error ? <Text accessibilityRole="alert" style={text}>{error}</Text> : null}
     {report && <View style={{ gap: 8 }}>
       <Text style={text}>Snapshot checked: {checked}</Text>
+      {report.paper_period && <Text style={text}>Period: {report.paper_period.label}</Text>}
       {report.status === "not-started" ? <Text style={text}>No Paper ledger yet.</Text> : <>
         <Text style={{ ...text, color: report.status === "consistent" ? "#4af0ce" : "#ffbc78" }}>
           {report.status === "consistent" ? "Retained records agree" : "Accounting review required"}
         </Text>
         {[
-          ["Configured starting cash", "starting_cash"],
+          [report.paper_period?.id !== "legacy" ? "Period starting cash" : "Configured starting cash", "starting_cash"],
           ["Net balance adjustments", "net_adjustments"],
           ["Net contributed capital", "net_contributed_capital"],
-          ["Historical realized P&L", "realized_pnl"],
+          ["Period realized P&L", "realized_pnl"],
           ["Remaining position cost", "open_cost_basis"],
           ["Expected available cash", "expected_cash"],
           ["Recorded available cash", "actual_cash"],

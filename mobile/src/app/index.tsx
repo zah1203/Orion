@@ -169,6 +169,9 @@ export default function App() {
   const [username, setUsername] = useState(""),
     [password, setPassword] = useState(""),
     [signup, setSignup] = useState(false);
+  const [periodCash, setPeriodCash] = useState("400000");
+  const [periodLabel, setPeriodLabel] = useState("Post-fix paper test");
+  const [periodConfirmation, setPeriodConfirmation] = useState("");
   const [adminAudit, setAdminAudit] = useState<Obj[]>([]);
   const [tradeChannel, setTradeChannel] = useState<string | null>(null);
   const [users, setUsers] = useState<Obj[]>([]),
@@ -1006,6 +1009,33 @@ export default function App() {
                           setNotice("Risk limits saved");
                         })
                       }
+                    />
+                  </Card>
+                  <Card title="Start a new paper-testing period">
+                    <Text style={s.note}>
+                      Archive current results and start with zero P&L and zero daily entries.
+                      Earlier trades and Telegram comparisons remain available in Performance.
+                      Risk limits and connections stay unchanged. Entries must be paused and
+                      pending/open trades finished. This also restarts the daily paper loss allowance.
+                    </Text>
+                    <Text style={s.note}>Current period: {me.state?.paper_period?.label || "Before first reset"}</Text>
+                    <Field label="New period starting cash ₹" value={periodCash} onChange={setPeriodCash} />
+                    <Field label="New period label" value={periodLabel} onChange={setPeriodLabel} />
+                    <Field label="Type START NEW PERIOD to confirm" value={periodConfirmation} onChange={setPeriodConfirmation} />
+                    <Button
+                      label="Archive results and start new period"
+                      disabled={busy || me.enabled || periodConfirmation !== "START NEW PERIOD"}
+                      onPress={() => run(async () => {
+                        if (!periodCash.trim()) throw new Error("Enter starting cash");
+                        await api("/paper-period", {
+                          amount: Number(periodCash), label: periodLabel,
+                          expected_period: me.state?.paper_period?.id || "legacy",
+                          confirmation: periodConfirmation,
+                        });
+                        setPeriodConfirmation("");
+                        await refresh();
+                        setNotice("New paper period started. P&L and daily entries are zero; previous results are archived. Entries remain paused.");
+                      })}
                     />
                   </Card>
                   <Card title="Adjust virtual cash">

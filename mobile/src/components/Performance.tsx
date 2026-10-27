@@ -47,6 +47,8 @@ function Chip({
   );
 }
 export default function Performance({ userId }: { userId?: string }) {
+  const [paperPeriod, setPaperPeriod] = useState("current");
+  const [periodOptions, setPeriodOptions] = useState<Data[]>([]);
   const [period, setPeriod] = useState("week"),
     [instrument, setInstrument] = useState("ALL"),
     [group, setGroup] = useState("day");
@@ -65,6 +67,7 @@ export default function Performance({ userId }: { userId?: string }) {
   const ready = period !== "custom" || Boolean(range.start && range.end);
   const requestKey = JSON.stringify([
     period,
+    paperPeriod,
     instrument,
     group,
     range,
@@ -87,13 +90,17 @@ export default function Performance({ userId }: { userId?: string }) {
       period,
       instrument,
       group_by: group,
+      paper_period: paperPeriod,
       ...(period === "custom" ? range : {}),
     });
     api(
       (userId ? "/admin/users/" + userId : "") + "/performance?" + q.toString(),
     )
       .then((data) => {
-        if (valid) setResult({ key: requestKey, data, error: "" });
+        if (valid) {
+          setResult({ key: requestKey, data, error: "" });
+          setPeriodOptions(data.paper_periods || []);
+        }
       })
       .catch((e) => {
         if (valid) setResult({ key: requestKey, data: null, error: e.message });
@@ -101,7 +108,7 @@ export default function Performance({ userId }: { userId?: string }) {
     return () => {
       valid = false;
     };
-  }, [period, instrument, group, range, userId, ready, requestKey]);
+  }, [period, paperPeriod, instrument, group, range, userId, ready, requestKey]);
   const chart = data?.chart?.slice(-60) || [];
   const scale = Math.max(
     1,
@@ -114,12 +121,27 @@ export default function Performance({ userId }: { userId?: string }) {
       <Text style={s.note}>
         Paper trading · Realized P&L after simulation fees
       </Text>
+      <Text style={s.label}>Paper-testing period</Text>
+      <View style={s.wrap}>
+        <Chip label="Current period" active={paperPeriod === "current"}
+          onPress={() => { setPaperPeriod("current"); setSelected(null); }} />
+        {periodOptions.slice(1).map((p) => (
+          <Chip key={p.id} label={"Archived: " + p.label}
+            active={paperPeriod === p.id}
+            onPress={() => { setPaperPeriod(p.id); setPeriod("all"); setSelected(null); }} />
+        ))}
+      </View>
+      <Text style={s.note}>
+        {data?.paper_period?.label || "Loading period…"}
+        {data?.archived ? " · Archived results, read only" : " · Current results"}
+        {data?.paper_period?.started_at ? " · Started " + new Date(data.paper_period.started_at).toLocaleString() : ""}
+      </Text>
       <View style={s.wrap}>
         {[
           ["today", "Today"],
           ["week", "This week"],
           ["month", "This month"],
-          ["all", "All time"],
+          ["all", "Whole period"],
           ["custom", "Custom"],
         ].map(([v, label]) => (
           <Chip
@@ -334,7 +356,7 @@ export default function Performance({ userId }: { userId?: string }) {
               </Text>
             </Pressable>
           ))}
-          <View style={s.detail}>
+          {!data.archived && <View style={s.detail}>
             <Text style={s.label}>
               Open P&L now ·{" "}
               {instrument === "ALL" ? "all instruments" : instrument}
@@ -352,7 +374,7 @@ export default function Performance({ userId }: { userId?: string }) {
               {data.current_open.mark_status}. This estimate is separate from
               the historical total above.
             </Text>
-          </View>
+          </View>}
           <Chip
             label={showTrades ? "Hide trade breakdown" : "Show trade breakdown"}
             active={false}

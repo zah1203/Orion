@@ -105,7 +105,7 @@ def report(state, max_age_seconds, now=None):
     )
     return dict(
         as_of=now.isoformat(),
-        period="Since account started",
+        period=("Current paper period: " + state["paper_period"]["label"]) if "paper_period" in state else "Since account started",
         totals=total,
         instruments=[serialize(groups[k]) for k in sorted(groups)],
         positions=positions,

@@ -138,6 +138,13 @@ class Balance(Strict):
     reason: str = Field(min_length=1, max_length=200)
 
 
+class PaperPeriod(Strict):
+    amount: float = Field(gt=0, le=100000000, allow_inf_nan=False)
+    label: str = Field(min_length=1, max_length=200)
+    expected_period: str = Field(min_length=1, max_length=64)
+    confirmation: Literal["START NEW PERIOD"]
+
+
 class Credentials(Strict):
     kotak_consumer_key: str | None = Field(default=None, max_length=4096)
     kotak_mobile: str | None = Field(default=None, max_length=30)
@@ -371,16 +378,16 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
         Attention(store).disable(uid,body.token)
         return {"ok":True}
 
-    def performance_result(uid, period, instrument, start, end, group_by):
+    def performance_result(uid, period, instrument, start, end, group_by, paper_period):
         try:
-            return accounts.performance(uid,period=period,instrument=instrument,start=start,end=end,group_by=group_by)
+            return accounts.performance(uid,period=period,instrument=instrument,start=start,end=end,group_by=group_by,paper_period=paper_period)
         except ValueError as exc:
             raise HTTPException(422,str(exc)) from None
 
     @app.get("/api/performance")
-    def own_performance(request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day"):
+    def own_performance(request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day", paper_period: str="current"):
         uid=identity(request)["user_id"]
-        return performance_result(uid,period,instrument,start,end,group_by)
+        return performance_result(uid,period,instrument,start,end,group_by,paper_period)
 
     def capital_result(uid):
         try:
@@ -400,11 +407,11 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
         return capital_result(uid)
 
     @app.get("/api/admin/users/{uid}/performance")
-    def user_performance(uid: str, request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day"):
+    def user_performance(uid: str, request: Request, period: str="week", instrument: str="ALL", start: str | None=None, end: str | None=None, group_by: str="day", paper_period: str="current"):
         owner(request)
         if uid not in {u["id"] for u in store.users()}:
             raise HTTPException(404,"User not found")
-        return performance_result(uid,period,instrument,start,end,group_by)
+        return performance_result(uid,period,instrument,start,end,group_by,paper_period)
 
     def trade_detail_result(uid, signal_id, offset):
         try:
@@ -774,6 +781,15 @@ def create_app(root, key, origin, *, trust_local_proxy=False):
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from None
         return {"ok": True}
+
+    @app.post("/api/paper-period")
+    def start_paper_period(body: PaperPeriod, request: Request):
+        uid = identity(request, True)["user_id"]
+        try:
+            period = accounts.start_paper_period(uid, body.amount, body.label, body.expected_period)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"ok": True, "paper_period": period}
 
     @app.put("/api/credentials")
     def credentials(body: Credentials, request: Request):
