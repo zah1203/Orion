@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import {
   Portfolio,
   Connections,
@@ -122,7 +123,7 @@ function Metrics({ p }: { p: Obj }) {
     </>
   );
 }
-function Positions({ data }: { data: Obj }) {
+function Positions({ data, userId }: { data: Obj; userId?: string }) {
   return (
     <>
       {data.pnl.positions.length === 0 && (
@@ -133,7 +134,9 @@ function Positions({ data }: { data: Obj }) {
         </Card>
       )}
       {[...data.pnl.positions].reverse().map((p: Obj) => (
-        <Card key={p.signal_id} title={p.symbol}>
+        <Pressable key={p.signal_id} accessibilityRole="button"
+          onPress={() => router.push({ pathname: "/trade", params: { signal: p.signal_id, ...(userId ? { userId } : {}) } })}>
+        <Card title={p.symbol}>
           <View style={s.row}>
             <Text style={s.tag}>
               {p.status} · {p.remaining} lots left
@@ -150,7 +153,9 @@ function Positions({ data }: { data: Obj }) {
           <Text style={s.note}>
             Realized {money(p.realized)} · Open {money(p.unrealized)}
           </Text>
+          <Text style={s.note}>Compare execution & Telegram →</Text>
         </Card>
+        </Pressable>
       ))}
     </>
   );
@@ -545,7 +550,7 @@ export default function App() {
                       })
                     }
                   />
-                  <Positions data={selected} />
+                  <Positions data={selected} userId={selected.id} />
                   <Button
                     muted
                     label="Load signal activity"
@@ -1105,6 +1110,8 @@ export default function App() {
                       {when(e.at)} · {e.signal_id || ""}
                     </Text>
                     <Text style={s.note}>{e.reason || e.detail || ""}</Text>
+                    {e.signal_id && <Button muted label="View trade & Telegram"
+                      onPress={() => router.push({ pathname: "/trade", params: { signal: e.signal_id, ...(selected?.id ? { userId: selected.id } : {}) } })} />}
                   </Card>
                 ))}
               {(tab === "Activity" || selected) && cursor && (

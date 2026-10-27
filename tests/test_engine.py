@@ -267,6 +267,93 @@ class EngineTests(unittest.TestCase):
             },
         )
 
+    def test_reply_close_uses_next_bid_not_announced_price(self):
+        self.enter()
+        out = self.msg(text="❌ Close Position | Partial Loss Booked from 1242.00 → 1122.50",
+                       event_id="close", message_id="2", reply_to=1)
+        self.assertEqual(out[0]["event"], "PROVIDER_EXIT_PENDING_QUOTE")
+        self.assertEqual(self.pos()["status"], "OPEN")
+        self.assertEqual(self.msg(text="Close Position", event_id="close", message_id="2", reply_to=1), [])
+        self.engine.db.close()
+        self.engine = Engine(self.db, self.cfg, self.master, True)
+        out = self.quote(165)
+        self.assertEqual((out[0]["reason"], out[0]["price"]), ("PROVIDER", "165"))
+        self.assertEqual(self.pos()["remaining"], 0)
+
+    def test_reply_close_cancels_pending(self):
+        self.msg()
+        out = self.msg(text="Close Position", event_id="close", message_id="2", reply_to="1")
+        self.assertEqual(out[0]["event"], "PENDING_CANCELLED_BY_PROVIDER")
+        self.assertEqual(self.pos()["status"], "CANCELLED")
+
+    def test_reply_close_never_guesses_missing_or_wrong_parent(self):
+        self.enter()
+        for i, reply in enumerate((None, 999)):
+            out = self.msg(text="Close Position", event_id=f"close{i}", message_id=str(i+2), reply_to=reply)
+            self.assertEqual(out[0]["event"], "EXIT_REQUIRES_REVIEW")
+            self.assertFalse(self.pos()["exit_requested"])
+
+    def test_reply_identity_conflict_does_not_close(self):
+        self.enter()
+        out = self.msg(text="Stoploss hit for NIFTY 22 SEP 23500 PE. CLOSE THIS POSITION!",
+                       event_id="close", message_id="2", reply_to=1)
+        self.assertEqual(out[0]["event"], "EXIT_REQUIRES_REVIEW")
+        self.assertFalse(self.pos()["exit_requested"])
+
+    def test_partial_or_conditional_commentary_does_not_close(self):
+        self.enter()
+        for i, text in enumerate(("Book partial profit", "Do not Close Position", "Close Position if price falls",
+                                  "T1 hit", "Close Position | book 1 lot")):
+            self.msg(text=text, event_id=f"comment{i}", message_id=str(i+2), reply_to=1)
+            self.assertFalse(self.pos()["exit_requested"])
+
+    def test_reply_close_waits_for_valid_quote(self):
+        self.enter()
+        self.msg(text="Close Position", event_id="close", message_id="2", reply_to=1)
+        self.quote(165, source_time=(self.t-timedelta(hours=1)).isoformat())
+        self.assertEqual(self.pos()["status"], "OPEN")
+        self.quote(165, market_open=False)
+        self.assertEqual(self.pos()["status"], "OPEN")
+        self.quote(165)
+        self.assertEqual(self.pos()["status"], "CLOSED")
+
+    def test_reply_close_is_scoped_to_channel(self):
+        self.enter()
+        other = "-1000000000099"
+        self.cfg["channels"][other] = copy.deepcopy(self.cfg["channels"]["-1000000000001"])
+        out = self.msg(text="Close Position", event_id="close", message_id="2", reply_to=1,
+                       channel_id=other)
+        self.assertEqual(out[0]["event"], "EXIT_REQUIRES_REVIEW")
+        self.assertFalse(self.pos()["exit_requested"])
+
+    def test_entry_rejection_records_all_triggered_limits(self):
+        self.cfg["max_entries_per_day"] = 0
+        self.cfg["max_open_positions"] = 0
+        self.cfg["daily_loss_limit"] = "0"
+        self.cfg["max_spread_fraction"] = "0.0001"
+        self.msg()
+        self.quote(169)
+        out = self.quote(170)
+        event = next(e for e in out if e["event"] == "ENTRY_LIMIT_REJECTED")
+        self.assertEqual(len(event["blockers"]), 4)
+        self.assertEqual(event["observed"]["entries"], 0)
+        self.assertEqual(event["limits"]["max_entries_per_day"], 0)
+        self.assertEqual(self.pos()["status"], "REJECTED")
+
+    def test_reply_close_does_not_reopen_closed_position(self):
+        self.enter()
+        self.quote(140)
+        before = self.pos()
+        out = self.msg(text="Close Position", event_id="close", message_id="2", reply_to=1)
+        self.assertEqual(out[0]["event"], "EXIT_REQUIRES_REVIEW")
+        self.assertEqual(self.pos(), before)
+
+    def test_reply_close_edited_message_requires_review(self):
+        self.enter()
+        out = self.msg(text="Close Position", event_id="close", message_id="2", reply_to=1, edited=True)
+        self.assertEqual(out[0]["event"], "EDIT_REQUIRES_REVIEW")
+        self.assertFalse(self.pos()["exit_requested"])
+
     def test_nearest_expiry_exact_strike(self):
         s = parse_signal(SIGNAL, TIME)
         later = copy.deepcopy(self.master["contracts"][0])

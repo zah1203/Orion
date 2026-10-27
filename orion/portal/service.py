@@ -107,6 +107,15 @@ class Accounts:
         finally:
             db.close()
 
+    def trade_details(self, uid, signal_id, offset=0):
+        from .trade_details import details
+        if offset < 0 or offset > 1000000:
+            raise ValueError("Invalid timeline offset")
+        with self.store.lock(uid):
+            user = self.store.user(uid)
+            return details(self.store.account_dir(uid) / "paper.db", signal_id,
+                           user["settings"].get("channels", {}), offset)
+
     def set_enabled(self, uid, enabled):
         with self.store.lock(uid):
             self.store.set_enabled(uid, enabled)
