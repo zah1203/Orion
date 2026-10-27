@@ -40,7 +40,8 @@ CONTRACT = re.compile(
 
 def contract_identity(text, source_time):
     """Return one explicit option identity without inferring a missing contract."""
-    matches = list(CONTRACT.finditer(text.upper().replace(",", "")))
+    normalized = re.sub(r"\bBANK\s+NIFTY\b", "BANKNIFTY", text.upper().replace(",", ""))
+    matches = list(CONTRACT.finditer(normalized))
     if len(matches) != 1:
         raise ValueError("Expected one explicit option contract")
     product, day, month, year, strike, kind = matches[0].groups()
