@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
+import { View, Text, Pressable, ScrollView, StyleSheet, AppState } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
 import { api, restore } from "../lib/api";
@@ -10,7 +10,7 @@ const time = (v: string) => v ? new Date(v).toLocaleString("en-IN", { timeZone: 
 const labels: Record<string, string> = {
   PAPER_BUY: "Entry filled", TARGET_REACHED: "Target reached", PAPER_EXIT: "Position closed",
   PROVIDER_EXIT_PENDING_QUOTE: "Provider close accepted — waiting for a quote",
-  ENTRY_LIMIT_REJECTED: "Entry blocked", REVIEW_OR_COMMENTARY: "Message not executed",
+  ENTRY_LIMIT_REJECTED: "Entry blocked", REVIEW_OR_COMMENTARY: "Message needs review — no trading action",
   EXIT_REQUIRES_REVIEW: "Close instruction needs review", SIGNAL_PENDING: "Waiting for entry",
   PENDING_CANCELLED_BY_PROVIDER: "Pending entry cancelled by provider",
 };
@@ -24,24 +24,51 @@ export default function Trade() {
   const key = JSON.stringify([signal, userId]);
   const [result, setResult] = useState<{ key: string; requestKey: string; data: Data } | null>(null);
   const [offset, setOffset] = useState(0), [refresh, setRefresh] = useState(0);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    const poll = setInterval(() => {
+      if (AppState.currentState === "active") setRefresh((n) => n + 1);
+    }, 10000);
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") setRefresh((n) => n + 1);
+    });
+    return () => { clearInterval(timer); clearInterval(poll); listener.remove(); };
+  }, []);
   const requestKey = JSON.stringify([key, offset, refresh]);
   const [status, setStatus] = useState<{ key: string; error: string } | null>(null);
   const busy = status?.key !== requestKey;
   const error = status?.key === requestKey ? status.error : "";
   useEffect(() => {
     let valid = true;
-    const query = new URLSearchParams({ signal_id: signal, offset: String(offset) });
-    restore().then(() => api((userId ? "/admin/users/" + encodeURIComponent(userId) : "") + "/paper-trade?" + query))
+    const load = async () => {
+      await restore();
+      const base = (userId ? "/admin/users/" + encodeURIComponent(userId) : "") + "/paper-trade?";
+      let page = await api(base + new URLSearchParams({ signal_id: signal, offset: "0" }));
+      const timeline = [...page.timeline];
+      while (page.next_offset != null && page.next_offset <= offset) {
+        page = await api(base + new URLSearchParams({ signal_id: signal, offset: String(page.next_offset) }));
+        timeline.push(...page.timeline);
+      }
+      return { ...page, timeline };
+    };
+    load()
       .then((data) => {
         if (valid) {
-          setResult((old) => ({ key, requestKey, data: { ...data, timeline: offset && old?.key === key ? [...old.data.timeline.slice(0, offset), ...data.timeline] : data.timeline } }));
+          setResult(() => ({ key, requestKey, data: { ...data, timeline: data.timeline } }));
           setStatus({ key: requestKey, error: "" });
         }
       })
       .catch((e) => { if (valid) setStatus({ key: requestKey, error: e.message || "Could not load trade details" }); });
     return () => { valid = false; };
   }, [signal, userId, key, offset, requestKey]);
-  const data = result?.key === key && (offset > 0 || result.requestKey === requestKey) ? result.data : null;
+  const data = result?.key === key ? result.data : null;
+  const valuation = data?.valuation;
+  const quote = valuation?.quote;
+  const quoteSeconds = quote?.source_time ? (clock - new Date(quote.source_time).getTime()) / 1000 : null;
+  const fresh = !error && quote?.status === "fresh" && quoteSeconds != null && quoteSeconds >= 0 && quoteSeconds <= quote.max_age_seconds;
+  const quoteStatus = quote?.status === "closed" ? "Closed — no open exposure" : quote?.bid == null ? "Unavailable" : fresh ? "Fresh" : "Stale — last-known estimate";
+  const currentMoney = (v: unknown) => v == null ? "Unavailable" : money(v);
   return <SafeAreaView style={s.page}><ScrollView contentContainerStyle={s.content}>
     <View style={s.row}>
       <Action label="‹ Back" onPress={() => router.canGoBack() ? router.back() : router.replace("/")} />
@@ -50,12 +77,21 @@ export default function Trade() {
     <Text style={s.eyebrow}>PAPER TRADE · EXECUTION & TELEGRAM</Text>
     <Text style={s.title}>{data?.symbol || "Trade details"}</Text>
     {!!error && <View style={s.card}><Text style={s.loss}>{error}</Text><Action label="Retry" onPress={() => setRefresh((n) => n + 1)} /></View>}
-    {busy && <Text style={s.note}>Loading recorded evidence…</Text>}
+    {busy && <Text style={s.note}>Updating trade details…</Text>}
     {data && <>
       <Text selectable style={s.note}>{data.channel_name} · {data.channel_id}</Text>
       <Text style={s.note}>Channel name: {data.channel_name_source} · Signal {data.signal_id}</Text>
       <View style={s.card}>
-        <Text style={s.heading}>{data.outcome} · {data.status}</Text>
+        <Text style={s.heading}>{data.status === "OPEN" ? "Open position" : data.outcome}</Text>
+        <Text style={s.text}>{[data.contract?.product, data.contract?.expiry, data.contract?.strike, data.contract?.option_type === "PE" ? "PUT (PE)" : data.contract?.option_type === "CE" ? "CALL (CE)" : data.contract?.option_type].filter(Boolean).join(" · ")}</Text>
+        <Text style={s.heading}>Combined P&amp;L{data.remaining > 0 && quote?.bid != null && !fresh ? " · last-known estimate" : ""}</Text>
+        <Text style={[s.amount, Number(valuation?.combined_pnl) < 0 && s.loss]}>{currentMoney(valuation?.combined_pnl)}</Text>
+        <Text style={s.note}>Realized plus open P&amp;L; includes charged fees, excludes future exit fees. Updates every 10 seconds while this page is active.</Text>
+        <View style={s.row}><Text style={s.note}>Latest broker bid</Text><Text style={s.value}>{quote?.status === "closed" ? "Not applicable — closed" : currentMoney(quote?.bid)}</Text></View>
+        <Text style={!fresh && data.remaining > 0 ? s.loss : s.note}>{quoteStatus}</Text>
+        {quote?.source_time && <Text style={s.note}>Quote: {time(quote.source_time)} · {Math.max(0, Math.floor(quoteSeconds || 0))} seconds ago</Text>}
+        <View style={s.row}><Text style={s.note}>Open / unrealized P&amp;L</Text><Text style={s.value}>{currentMoney(valuation?.unrealized_pnl)}</Text></View>
+        <Text style={s.heading}>Realized P&amp;L</Text>
         <Text style={[s.amount, Number(data.realized_pnl) < 0 && s.loss]}>{money(data.realized_pnl)}</Text>
         <Text style={s.note}>Cumulative realized P&L after recorded fees. A stop exit can still finish in profit.</Text>
         {[
@@ -64,7 +100,7 @@ export default function Trade() {
           ["Final exit", data.exit_reason ? `${data.exit_reason} · ${money(data.exit_price)}` : "No recorded final exit"],
           ["Lots", `${data.lots} entered · ${data.remaining} remaining`],
         ].map(([label, value]) => <View key={label} style={s.row}><Text style={s.note}>{label}</Text><Text style={s.value}>{value}</Text></View>)}
-        <Text style={s.text}>{data.targets.map((t: string, i: number) => `T${i + 1} ${money(t)}`).join("   ·   ") || "Targets not recorded"}</Text>
+        <Text style={s.text}>{data.targets.map((t: string, i: number) => `T${i + 1} ${money(t)}${data.targets_hit?.includes(i + 1) ? " · HIT" : ""}`).join("   ·   ") || "Targets not recorded"}</Text>
       </View>
       <Text style={s.heading}>Compare the timeline</Text>
       <Text style={s.note}>Ordered by when Orion recorded each event. Telegram messages also show the provider timestamp. Reported target hits are not proof of an Orion fill.</Text>
@@ -75,8 +111,9 @@ export default function Trade() {
           <Text style={s.note}>Provider time: {time(item.source_time)}</Text>
           <Text selectable style={s.text}>{item.text || "No text retained — this may be a media-only message."}</Text>
         </> : <>
-          <Text style={s.heading}>{labels[item.event] || item.event.replaceAll("_", " ")}{item.event === "TARGET_REACHED" ? ` · T${item.body.target}` : ""}</Text>
-          {item.body.reason && <Text style={s.text}>Reason: {item.body.reason}</Text>}
+          <Text style={s.heading}>{item.display_label || labels[item.event] || item.event.replaceAll("_", " ")}{item.event === "TARGET_REACHED" ? ` · T${item.body.target}` : ""}</Text>
+          {item.display_note && <Text style={s.note}>{item.display_note}</Text>}
+          {!item.display_label && item.body.reason && <Text style={s.text}>Reason: {item.body.reason}</Text>}
           {item.body.price != null && <Text style={s.text}>Executed price: {money(item.body.price)}</Text>}
           {item.body.stop != null && <Text style={s.text}>Stop: {money(item.body.stop)}</Text>}
           {item.body.lots != null && <Text style={s.text}>Entered lots: {item.body.lots}</Text>}

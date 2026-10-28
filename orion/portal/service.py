@@ -145,7 +145,8 @@ class Accounts:
         with self.store.lock(uid):
             user = self.store.user(uid)
             return details(self.store.account_dir(uid) / "paper.db", signal_id,
-                           user["settings"].get("channels", {}), offset)
+                           user["settings"].get("channels", {}), offset,
+                           quote_age=user["settings"]["quote_max_age_seconds"])
 
     def set_enabled(self, uid, enabled):
         with self.store.lock(uid):
