@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ScrollView, StyleSheet, AppState } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
+import TradeChart from "../components/TradeChart";
 import { api, restore } from "../lib/api";
 
 type Data = Record<string, any>;
@@ -24,6 +25,7 @@ export default function Trade() {
   const key = JSON.stringify([signal, userId]);
   const [result, setResult] = useState<{ key: string; requestKey: string; data: Data } | null>(null);
   const [offset, setOffset] = useState(0), [refresh, setRefresh] = useState(0);
+  const [chartWindow, setChartWindow] = useState("1D");
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), 1000);
@@ -35,7 +37,7 @@ export default function Trade() {
     });
     return () => { clearInterval(timer); clearInterval(poll); listener.remove(); };
   }, []);
-  const requestKey = JSON.stringify([key, offset, refresh]);
+  const requestKey = JSON.stringify([key, offset, refresh, chartWindow]);
   const [status, setStatus] = useState<{ key: string; error: string } | null>(null);
   const busy = status?.key !== requestKey;
   const error = status?.key === requestKey ? status.error : "";
@@ -44,10 +46,10 @@ export default function Trade() {
     const load = async () => {
       await restore();
       const base = (userId ? "/admin/users/" + encodeURIComponent(userId) : "") + "/paper-trade?";
-      let page = await api(base + new URLSearchParams({ signal_id: signal, offset: "0" }));
+      let page = await api(base + new URLSearchParams({ signal_id: signal, chart_window: chartWindow, offset: "0" }));
       const timeline = [...page.timeline];
       while (page.next_offset != null && page.next_offset <= offset) {
-        page = await api(base + new URLSearchParams({ signal_id: signal, offset: String(page.next_offset) }));
+        page = await api(base + new URLSearchParams({ signal_id: signal, chart_window: chartWindow, offset: String(page.next_offset) }));
         timeline.push(...page.timeline);
       }
       return { ...page, timeline };
@@ -61,7 +63,7 @@ export default function Trade() {
       })
       .catch((e) => { if (valid) setStatus({ key: requestKey, error: e.message || "Could not load trade details" }); });
     return () => { valid = false; };
-  }, [signal, userId, key, offset, requestKey]);
+  }, [signal, userId, key, offset, requestKey, chartWindow]);
   const data = result?.key === key ? result.data : null;
   const valuation = data?.valuation;
   const quote = valuation?.quote;
@@ -102,6 +104,7 @@ export default function Trade() {
         ].map(([label, value]) => <View key={label} style={s.row}><Text style={s.note}>{label}</Text><Text style={s.value}>{value}</Text></View>)}
         <Text style={s.text}>{data.targets.map((t: string, i: number) => `T${i + 1} ${money(t)}${data.targets_hit?.includes(i + 1) ? " · HIT" : ""}`).join("   ·   ") || "Targets not recorded"}</Text>
       </View>
+      <TradeChart data={data} window={chartWindow} onWindow={setChartWindow} />
       <Text style={s.heading}>Compare the timeline</Text>
       <Text style={s.note}>Ordered by when Orion recorded each event. Telegram messages also show the provider timestamp. Reported target hits are not proof of an Orion fill.</Text>
       {data.timeline.map((item: Data, index: number) => <View key={`${item.kind}-${item.seq || item.message_id}-${index}`} style={[s.card, item.kind === "telegram" && s.telegram]}>

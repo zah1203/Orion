@@ -7,7 +7,7 @@ import sqlite3
 from ..core import dec, stamp
 
 
-def details(path, signal_id, channels, offset=0, quote_age=15, now=None):
+def details(path, signal_id, channels, offset=0, quote_age=15, now=None, chart_window='1D'):
     now = now or datetime.now(timezone.utc)
     if not path.exists():
         raise LookupError("Trade not found")
@@ -46,6 +46,8 @@ def details(path, signal_id, channels, offset=0, quote_age=15, now=None):
                 events.append(dict(kind="orion", seq=seq, at=at, event=event, body=b))
         if position is None and not events and not messages:
             raise LookupError("Trade not found")
+        from .trade_chart import chart
+        price_chart = chart(db, position or {}, [e for e in events if e['body'].get('signal_id') == signal_id], chart_window, now, quote_age)
     own = [e for e in events if e["body"].get("signal_id") == signal_id]
     buys = [e for e in own if e["event"] == "PAPER_BUY"]
     exits = [e for e in own if e["event"] == "PAPER_EXIT" or
@@ -103,7 +105,7 @@ def details(path, signal_id, channels, offset=0, quote_age=15, now=None):
     notes.append("Telegram entries are linked by message/reply IDs, not by inferred price similarity. Unlinked posts and media content are not included.")
     name = buys[0]["body"].get("channel_name") if buys else None
     configured = channels.get(channel, {}).get("name")
-    return dict(valuation=valuation, contract={k: contract.get(k) for k in ('product', 'expiry', 'strike', 'option_type')}, targets_hit=targets_hit, signal_id=signal_id, channel_id=channel, channel_name=name or configured or channel,
+    return dict(price_chart=price_chart, valuation=valuation, contract={k: contract.get(k) for k in ('product', 'expiry', 'strike', 'option_type')}, targets_hit=targets_hit, signal_id=signal_id, channel_id=channel, channel_name=name or configured or channel,
                 channel_name_source="recorded at entry" if name else "current settings" if configured else "channel ID",
                 symbol=p.get("contract", {}).get("symbol", "Unfilled signal"), status=p.get("status", "Not entered"),
                 outcome=outcome, entry_price=p.get("entry_fill"), entry_time=p.get("entry_time"),
