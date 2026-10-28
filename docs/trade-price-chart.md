@@ -46,3 +46,14 @@ Default scaling fits candle highs/lows; the optional levels control fits trade
 levels too. Markers outside the visible time/price range stay in the event list.
 Tap a candle for OHLC and observation count. Existing retention/query limits still
 apply: interval selection cannot recover missing earlier history.
+
+
+## Intraday controls
+
+The trade UI now requests `DAY`: midnight IST through now for an open trade,
+or midnight IST through final exit for a closed trade, still bounded by when
+this signal began tracking the contract. Range tabs and 40-candle pagination
+are removed. Show all available candles with 5/10/15/30-minute and 1-hour buttons
+(default 10 minutes). Existing API ranges and 3-minute aggregation remain for
+compatibility. This is one contract's day view, not an account-wide trade chart.
+The retained-quote cap and missing-history warnings still apply.

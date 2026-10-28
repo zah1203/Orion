@@ -25,7 +25,7 @@ export default function Trade() {
   const key = JSON.stringify([signal, userId]);
   const [result, setResult] = useState<{ key: string; requestKey: string; data: Data } | null>(null);
   const [offset, setOffset] = useState(0), [refresh, setRefresh] = useState(0);
-  const [chartWindow, setChartWindow] = useState("1D");
+  const chartWindow = "DAY";
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), 1000);
@@ -104,7 +104,7 @@ export default function Trade() {
         ].map(([label, value]) => <View key={label} style={s.row}><Text style={s.note}>{label}</Text><Text style={s.value}>{value}</Text></View>)}
         <Text style={s.text}>{data.targets.map((t: string, i: number) => `T${i + 1} ${money(t)}${data.targets_hit?.includes(i + 1) ? " · HIT" : ""}`).join("   ·   ") || "Targets not recorded"}</Text>
       </View>
-      <TradeChart data={data} window={chartWindow} onWindow={setChartWindow} />
+      <TradeChart data={data} />
       <Text style={s.heading}>Compare the timeline</Text>
       <Text style={s.note}>Ordered by when Orion recorded each event. Telegram messages also show the provider timestamp. Reported target hits are not proof of an Orion fill.</Text>
       {data.timeline.map((item: Data, index: number) => <View key={`${item.kind}-${item.seq || item.message_id}-${index}`} style={[s.card, item.kind === "telegram" && s.telegram]}>
