@@ -6,7 +6,7 @@ from ..core import stamp, dec
 
 
 def chart(db, position, events, window='1D', now=None, quote_age=15):
-    if window not in ('1D', '1W', '1M'):
+    if window not in ('DAY', '1D', '1W', '1M'):
         raise ValueError('Unknown chart window')
     now = now or datetime.now(timezone.utc)
     end = now
@@ -14,7 +14,9 @@ def chart(db, position, events, window='1D', now=None, quote_age=15):
              (e['event'] == 'TARGET_REACHED' and e['body'].get('remaining') == 0)]
     if position.get('status') == 'CLOSED' and exits:
         end = min(now, stamp(exits[-1]['at']))
-    start = end - timedelta(days={'1D': 1, '1W': 7, '1M': 30}[window])
+    ist = timezone(timedelta(hours=5, minutes=30))
+    start = (end.astimezone(ist).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+             if window == 'DAY' else end - timedelta(days={'1D': 1, '1W': 7, '1M': 30}[window]))
     # Never use a token's earlier history before this signal identified its contract.
     tracked = position.get('source_time') or position.get('entry_time')
     if tracked:
@@ -48,7 +50,7 @@ def chart(db, position, events, window='1D', now=None, quote_age=15):
     # Deduplicate timestamps deterministically; break connections at missing intervals.
     unique = {p['at']: p for p in points}
     points = list(unique.values())
-    candles = {str(minutes): candle_buckets(points, minutes) for minutes in (3, 5, 10)}
+    candles = {str(minutes): candle_buckets(points, minutes) for minutes in (3, 5, 10, 15, 30, 60)}
     segments, segment = [], []
     for point in points:
         if segment and (stamp(point['at']) - stamp(segment[-1]['at'])).total_seconds() > 60:

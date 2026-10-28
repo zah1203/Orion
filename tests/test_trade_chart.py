@@ -102,3 +102,25 @@ class CandleTests(unittest.TestCase):
             self.assertEqual(max(float(c['bid']['high']) for c in chart_data['candles']['10']), 200)
         finally:
             fixture.tearDown()
+
+
+class IntradayTests(TradeChartTests):
+    def test_day_uses_ist_midnight_and_all_requested_intervals(self):
+        self.quote('yesterday', 16 * 3600, '90')
+        self.quote('today', 15 * 3600, '100')
+        self.quote('latest', 10, '110')
+        result = self.get('DAY')
+        self.assertEqual(result['start'], '2026-10-27T18:30:00+00:00')
+        self.assertEqual(result['observations'], 2)
+        for minutes in ('5', '10', '15', '30', '60'):
+            self.assertEqual(sum(c['count'] for c in result['candles'][minutes]), 2)
+            for candle in result['candles'][minutes]:
+                local_seconds = int(stamp(candle['at']).timestamp()) + 19800
+                self.assertEqual(local_seconds % (int(minutes) * 60), 0)
+
+    def test_closed_trade_uses_exit_day(self):
+        self.position['status'] = 'CLOSED'
+        events = [dict(event='PAPER_EXIT', at='2026-10-27T10:00:00+00:00', body=dict(price='100'))]
+        result = self.get('DAY', events)
+        self.assertEqual(result['start'], '2026-10-26T18:30:00+00:00')
+        self.assertEqual(result['end'], '2026-10-27T10:00:00+00:00')

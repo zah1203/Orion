@@ -5,19 +5,14 @@ import Svg, { Rect, Line, Circle, Text as SvgText } from "react-native-svg";
 type Data = Record<string, any>;
 const money = (n: unknown) => n == null ? "Unavailable" : "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 const time = (at: string) => new Date(at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-export default function TradeChart({ data, window, onWindow }: { data: Data; window: string; onWindow: (v: string) => void }) {
+export default function TradeChart({ data }: { data: Data }) {
   const [series, setSeries] = useState("ltp");
   const [levels, setLevels] = useState(false);
   const [width, setWidth] = useState(360);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [interval, setInterval] = useState("10");
-  const [page, setPage] = useState(0);
   const chart = data.price_chart;
-  const allCandles: Data[] = chart?.candles?.[interval] || [];
-  const pageCount = Math.max(1, Math.ceil(allCandles.length / 40));
-  const safePage = Math.min(page, pageCount - 1);
-  const finish = allCandles.length - safePage * 40;
-  const candles = allCandles.slice(Math.max(0, finish - 40), finish);
+  const candles: Data[] = chart?.candles?.[interval] || [];
   const intervalMs = Number(interval) * 60000;
   const points: Data[] = chart?.segments.flat() || [];
   const selected = candles.find((p) => p.at === selectedTime);
@@ -44,12 +39,12 @@ export default function TradeChart({ data, window, onWindow }: { data: Data; win
     <Text style={s.heading}>Contract price chart</Text>
     <Text style={s.note}>{data.symbol} · {series === "ltp" ? "Last traded price" : "Broker bid / exit valuation"}</Text>
     <View style={s.row}>
-      {["1D", "1W", "1M"].map((v) => <Pressable accessibilityRole="button" accessibilityState={{ selected: window === v }} key={v} onPress={() => { setSelectedTime(null); setPage(0); onWindow(v); }} style={[s.chip, window === v && s.active]}><Text style={s.text}>{v}</Text></Pressable>)}
       {["ltp", "bid"].map((v) => <Pressable accessibilityRole="button" accessibilityState={{ selected: series === v }} key={v} onPress={() => setSeries(v)} style={[s.chip, series === v && s.active]}><Text style={s.text}>{v.toUpperCase()}</Text></Pressable>)}
     </View>
-    <View style={s.row}>{["3", "5", "10"].map((v) => <Pressable key={v} accessibilityRole="button" accessibilityState={{ selected: interval === v }} onPress={() => { setInterval(v); setPage(0); setSelectedTime(null); }} style={[s.chip, interval === v && s.active]}><Text style={s.text}>{v} min</Text></Pressable>)}</View>
+    <View style={s.row}>{["5", "10", "15", "30", "60"].map((v) => <Pressable key={v} accessibilityRole="button" accessibilityState={{ selected: interval === v }} onPress={() => { setInterval(v); setSelectedTime(null); }} style={[s.chip, interval === v && s.active]}><Text style={s.text}>{v === "60" ? "1 hour" : v + " min"}</Text></Pressable>)}</View>
+    <Text style={s.note}>{data.status === "CLOSED" ? "Exit day" : "Today"} (IST) · All available candles for this contract. Entries and exits are listed below.</Text>
     <Text style={s.note}>Green = close above open; red = close below open. Candles use recorded quotes, not complete exchange history. Faded candles have incomplete coverage.</Text>
-    {chart?.window !== window ? <Text style={s.note}>Loading selected range…</Text> : candles.length && latest ? <>
+    {chart?.window !== "DAY" ? <Text style={s.note}>Loading selected range…</Text> : candles.length && latest ? <>
       <Text style={s.heading}>{money(latest[series])} <Text style={s.note}>last plotted observation</Text></Text>
       <Text style={s.note}>{time(latest.at)} IST · Quote freshness is shown in the position summary above.</Text>
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
@@ -81,10 +76,6 @@ export default function TradeChart({ data, window, onWindow }: { data: Data; win
         }} />
       </View>
       <Text style={s.note}>{selected ? time(selected.at) + ` IST · ${interval} min · O ${money(selected[series].open)} · H ${money(selected[series].high)} · L ${money(selected[series].low)} · C ${money(selected[series].close)} · ${selected.count} observations${selected.partial ? " · Incomplete coverage" : ""}` : "Tap a candle to inspect open, high, low and close. B = entry; S = exit or partial exit. Times are IST."}</Text>
-      <View style={s.row}>
-        <Pressable accessibilityRole="button" disabled={safePage >= pageCount - 1} onPress={() => { setPage(safePage + 1); setSelectedTime(null); }}><Text style={s.link}>{safePage >= pageCount - 1 ? "Start of retained history" : "← Earlier candles"}</Text></Pressable>
-        <Pressable accessibilityRole="button" disabled={safePage === 0} onPress={() => { setPage(safePage - 1); setSelectedTime(null); }}><Text style={s.link}>{safePage === 0 ? "Latest candles" : "Later candles →"}</Text></Pressable>
-      </View>
       <Pressable accessibilityRole="button" onPress={() => setLevels(!levels)}><Text style={s.link}>{levels ? "Hide price levels to zoom into price movement" : "Fit entry, stop and targets"}</Text></Pressable>
     </> : <Text style={s.note}>No retained broker quotes in this window. Execution prices below are not a price-history chart.</Text>}
     <View style={s.row}>{guides.map((g) => <Text key={g.label} style={[s.note, { color: g.color }]}>{g.label} {money(g.price)}</Text>)}</View>
