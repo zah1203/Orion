@@ -71,3 +71,34 @@ class TradeChartTests(unittest.TestCase):
         prices = [float(p['bid']) for seg in c['segments'] for p in seg]
         self.assertEqual((min(prices), max(prices)), (50, 150))
         self.assertLess(len(prices), 750)
+
+
+class CandleTests(unittest.TestCase):
+    def test_ohlc_intervals_gaps_and_ist_alignment(self):
+        from orion.portal.trade_chart import candle_buckets
+        points = [dict(at='2026-10-28T03:' + at + '+00:00', ltp=ltp, bid=bid)
+                  for at, ltp, bid in [('30:00', '100', '99'), ('30:30', '110', '102'),
+                                       ('31:00', '90', '89'), ('32:59', '105', '104'),
+                                       ('40:00', '120', '119')]]
+        for minutes in (3, 5, 10):
+            candles = candle_buckets(points, minutes)
+            self.assertEqual(len(candles), 2)
+            self.assertEqual(candles[0]['ltp'], dict(open='100', high='110', low='90', close='105'))
+            self.assertEqual(candles[0]['bid'], dict(open='99', high='104', low='89', close='104'))
+            self.assertEqual(candles[0]['count'], 4)
+            self.assertTrue(candles[0]['partial'])  # >60-second internal gap
+            self.assertTrue(candles[1]['partial'])  # only one observation
+            self.assertEqual(candles[0]['at'], '2026-10-28T03:30:00+00:00')
+        self.assertEqual(candle_buckets([], 10), [])
+
+    def test_candles_use_raw_extrema_before_line_sampling(self):
+        fixture = TradeChartTests()
+        fixture.setUp()
+        try:
+            for i in range(200):
+                fixture.quote(i, 200-i, '200' if i == 99 else '100')
+            chart_data = fixture.get()
+            self.assertEqual(sum(c['count'] for c in chart_data['candles']['10']), 200)
+            self.assertEqual(max(float(c['bid']['high']) for c in chart_data['candles']['10']), 200)
+        finally:
+            fixture.tearDown()
