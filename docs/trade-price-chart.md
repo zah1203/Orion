@@ -31,3 +31,18 @@ authorization applies to its `chart_window=1D|1W|1M` parameter. A new Expo-compa
 react-native-svg dependency is included in package.json and package-lock.json.
 The web dashboard is rebuilt by deployment; native clients require a build with
 the compatible SVG module (also included in Expo Go).
+
+## Candlestick view
+
+The chart defaults to 10-minute OHLC candles, with 3- and 5-minute options.
+Candles are computed from validated raw retained quotes before line sampling,
+separately for LTP and bid, aligned to IST midnight. They are observation-based,
+not official exchange candles. Empty buckets are omitted. Buckets with gaps over
+60 seconds, missing boundary coverage, or a single observation are faded and
+labelled incomplete when selected. No historical ticks or volume are fabricated.
+
+The view pages through up to 40 nonempty candles at a time with a true time axis.
+Default scaling fits candle highs/lows; the optional levels control fits trade
+levels too. Markers outside the visible time/price range stay in the event list.
+Tap a candle for OHLC and observation count. Existing retention/query limits still
+apply: interval selection cannot recover missing earlier history.

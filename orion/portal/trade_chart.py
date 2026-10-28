@@ -48,6 +48,7 @@ def chart(db, position, events, window='1D', now=None, quote_age=15):
     # Deduplicate timestamps deterministically; break connections at missing intervals.
     unique = {p['at']: p for p in points}
     points = list(unique.values())
+    candles = {str(minutes): candle_buckets(points, minutes) for minutes in (3, 5, 10)}
     segments, segment = [], []
     for point in points:
         if segment and (stamp(point['at']) - stamp(segment[-1]['at'])).total_seconds() > 60:
@@ -80,8 +81,41 @@ def chart(db, position, events, window='1D', now=None, quote_age=15):
                for e in events if e['event'] in ('PAPER_BUY', 'TARGET_REACHED', 'PAPER_EXIT')
                and e['body'].get('price') is not None and start <= stamp(e['at']) <= end]
     return dict(window=window, start=start.isoformat(), end=end.isoformat(), segments=sampled,
-                observations=len(points), truncated=truncated, markers=markers,
+                observations=len(points), truncated=truncated, markers=markers, candles=candles,
                 note='Retained broker observations since this signal, not full exchange history. '
                      '1D/1W/1M cover up to 24 hours/7 days/30 days ending now (or at final exit). '
                      'Lines break across gaps over 60 seconds. Sampled points preserve observed extrema. '
                      'LTP is last traded price; Orion values exits using bid. Telegram prices are excluded.')
+
+
+def candle_buckets(points, minutes):
+    """OHLC from validated raw observations, never from sampled line points.
+
+    Buckets align to IST midnight. Empty intervals stay empty; coverage metadata
+    identifies sparse/incomplete candles without inventing exchange ticks.
+    """
+    buckets = {}
+    seconds = minutes * 60
+    for point in points:
+        at = stamp(point['at'])
+        epoch = int(at.timestamp())
+        start = ((epoch + 19800) // seconds) * seconds - 19800
+        if start not in buckets:
+            buckets[start] = dict(at=datetime.fromtimestamp(start, timezone.utc).isoformat(),
+                                  first_at=point['at'], last_at=point['at'], count=0, max_gap_seconds=0,
+                                  **{field: dict(open=point[field], high=point[field], low=point[field], close=point[field])
+                                     for field in ('ltp', 'bid')})
+        bucket = buckets[start]
+        bucket['max_gap_seconds'] = max(bucket['max_gap_seconds'], (at - stamp(bucket['last_at'])).total_seconds())
+        bucket['last_at'] = point['at']
+        bucket['count'] += 1
+        for field in ('ltp', 'bid'):
+            values = bucket[field]
+            values['high'] = str(max(dec(values['high']), dec(point[field])))
+            values['low'] = str(min(dec(values['low']), dec(point[field])))
+            values['close'] = point[field]
+    for start, bucket in buckets.items():
+        bucket['partial'] = (stamp(bucket['first_at']).timestamp() - start > 60 or
+                             start + seconds - stamp(bucket['last_at']).timestamp() > 60 or
+                             bucket['max_gap_seconds'] > 60 or bucket['count'] < 2)
+    return list(buckets.values())
