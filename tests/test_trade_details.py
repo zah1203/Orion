@@ -104,3 +104,50 @@ class TradeDetailsTests(unittest.TestCase):
                 self.assertEqual(c.get("/api/paper-trade",params=dict(signal_id=SID),headers=h).json()["outcome"],"Profit")
                 self.assertEqual(c.get(f"/api/admin/users/{other}/paper-trade",params=dict(signal_id=SID),headers=h).status_code,404)
                 self.assertEqual(c.get("/api/paper-trade",params=dict(signal_id=SID,offset=-1),headers=h).status_code,422)
+
+class CurrentValuationTests(TradeDetailsTests):
+    def open_position(self, mark=True):
+        with sqlite3.connect(self.path) as db:
+            state = json.loads(db.execute('SELECT body FROM state').fetchone()[0])
+            p = state['positions'][SID]
+            p.update(status='OPEN', remaining=1, pnl='75')
+            p['contract'].update(segment='mcx_fo', token='42', premium_multiplier='100', product='CRUDEOIL', option_type='PE')
+            if mark:
+                state['marks'] = {'mcx_fo:42': dict(bid='95', source_time='2026-10-27T09:03:00+00:00', market_open=True)}
+            db.execute('UPDATE state SET body=?', (json.dumps(state),))
+
+    def test_partial_exit_combined_and_stale_bid(self):
+        from orion.core import stamp
+        self.open_position()
+        d = details(self.path, SID, {}, quote_age=15, now=stamp('2026-10-27T09:03:05+00:00'))
+        self.assertEqual(d['valuation']['unrealized_pnl'], '-500')
+        self.assertEqual(d['valuation']['combined_pnl'], '-425')
+        self.assertEqual(d['valuation']['quote']['status'], 'fresh')
+        self.assertEqual(d['targets_hit'], [1])
+        d = details(self.path, SID, {}, quote_age=15, now=stamp('2026-10-27T09:04:00+00:00'))
+        self.assertEqual(d['valuation']['quote']['status'], 'stale')
+        self.assertEqual(d['valuation']['combined_pnl'], '-425')
+
+    def test_missing_quote_is_not_zero_loss_and_closed_has_no_exposure(self):
+        self.open_position(False)
+        v = details(self.path, SID, {})['valuation']
+        self.assertIsNone(v['unrealized_pnl'])
+        self.assertIsNone(v['combined_pnl'])
+        self.assertEqual(v['quote']['status'], 'unavailable')
+        with sqlite3.connect(self.path) as db:
+            state = json.loads(db.execute('SELECT body FROM state').fetchone()[0])
+            state['positions'][SID].update(status='CLOSED', remaining=0)
+            db.execute('UPDATE state SET body=?', (json.dumps(state),))
+        v = details(self.path, SID, {})['valuation']
+        self.assertEqual(v['combined_pnl'], '75')
+        self.assertEqual(v['unrealized_pnl'], '0')
+        self.assertEqual(v['quote']['status'], 'closed')
+
+    def test_only_recognized_reply_commentary_gets_neutral_label(self):
+        with sqlite3.connect(self.path) as db:
+            for mid, text in [(10,'519'), (11,'Crudeoil Put\nNear First Target'), (12,'Move SL 500'), (13,'Close now'), (14,'')]:
+                msg = dict(type='message', channel_id='-100123', message_id=mid, reply_to=1, text=text, source_time='2026-10-27T09:04:00+00:00')
+                db.execute('INSERT INTO source_events VALUES(?,?,?)', (str(mid), msg['source_time'], json.dumps(msg)))
+                db.execute('INSERT INTO audit(at,event,body) VALUES(?,?,?)', (msg['source_time'], 'REVIEW_OR_COMMENTARY', json.dumps(dict(signal_id='-100123:'+str(mid), reason='Expected one explicit option contract'))))
+        events = [e for e in details(self.path, SID, {})['timeline'] if e.get('event') == 'REVIEW_OR_COMMENTARY']
+        self.assertEqual([e['body']['signal_id'] for e in events if 'display_label' in e], ['-100123:10','-100123:11'])

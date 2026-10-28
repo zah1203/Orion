@@ -1,11 +1,14 @@
 """Read-only, account-local trade evidence; Telegram claims are not fills."""
 from contextlib import closing
 import json
+import re
+from datetime import datetime, timezone
 import sqlite3
 from ..core import dec, stamp
 
 
-def details(path, signal_id, channels, offset=0):
+def details(path, signal_id, channels, offset=0, quote_age=15, now=None):
+    now = now or datetime.now(timezone.utc)
     if not path.exists():
         raise LookupError("Trade not found")
     channel, sep, message_id = signal_id.rpartition(":")
@@ -51,6 +54,45 @@ def details(path, signal_id, channels, offset=0):
     initial_stop = buys[0]["body"].get("stop") if buys else (p.get("stop") if not p.get("entry_fill") else None)
     pnl = p.get("pnl")
     outcome = ("Profit" if dec(pnl) > 0 else "Loss" if dec(pnl) < 0 else "Break-even") if pnl is not None and p.get("status") == "CLOSED" else p.get("status", "No filled trade")
+    # Presentation only: never reinterpret these replies as orders or quotes.
+    for event in events:
+        if event['event'] != 'REVIEW_OR_COMMENTARY':
+            continue
+        mid = event['body'].get('signal_id', '').rpartition(':')[2]
+        candidates = [m for m in messages if m['message_id'] == mid
+                      and m['reply_to'] in linked and stamp(m['at']) <= stamp(event['at'])]
+        if not candidates:
+            continue
+        message = max(candidates, key=lambda m: stamp(m['at']))
+        text = message['text'].strip()
+        if not message['edited'] and (re.fullmatch(r'\d+(?:\.\d+)?', text) or re.fullmatch(
+                r'(?:CRUDEOILM?|GOLDM?|SILVERM?|BANK\s*NIFTY|NIFTY)\s+(?:PUT|CALL|CE|PE)(?:\s+NEAR\s+(?:FIRST|SECOND|THIRD|[123])\s+TARGET)?',
+                text, re.I)):
+            event['display_label'] = 'Telegram commentary — no trading action'
+            event['display_note'] = 'Provider price/commentary update. This is not a broker quote or an execution.'
+    contract = p.get('contract', {})
+    filled = bool(p.get('entry_fill') and p.get('lots'))
+    remaining = p.get('remaining', 0)
+    quote = dict(bid=None, source_time=None, status='unavailable', max_age_seconds=quote_age)
+    unrealized = None
+    if filled and not remaining:
+        unrealized = dec('0')
+        quote['status'] = 'closed'
+    elif filled:
+        mark = state.get('marks', {}).get(str(contract.get('segment')) + ':' + str(contract.get('token')))
+        if mark:
+            bid = dec(mark['bid'])
+            age = (now - stamp(mark['source_time'])).total_seconds()
+            quote.update(bid=str(bid), source_time=mark['source_time'],
+                         status='fresh' if 0 <= age <= quote_age and mark.get('market_open') else 'stale')
+            multiplier = contract.get('premium_multiplier')
+            if multiplier is not None:
+                unrealized = (bid - dec(p['entry_fill'])) * dec(multiplier) * remaining
+    valuation = dict(quote=quote, unrealized_pnl=None if unrealized is None else str(unrealized),
+                     combined_pnl=None if unrealized is None or pnl is None else str(dec(pnl) + unrealized),
+                     as_of=now.isoformat())
+    targets_hit = sorted({e['body']['target'] for e in own
+                          if e['event'] == 'TARGET_REACHED' and 'target' in e['body']})
     timeline = events + [dict(kind="telegram", **m) for m in messages]
     timeline.sort(key=lambda e: (stamp(e["at"]), e["kind"], e.get("seq", 0)))
     notes = []
@@ -61,7 +103,7 @@ def details(path, signal_id, channels, offset=0):
     notes.append("Telegram entries are linked by message/reply IDs, not by inferred price similarity. Unlinked posts and media content are not included.")
     name = buys[0]["body"].get("channel_name") if buys else None
     configured = channels.get(channel, {}).get("name")
-    return dict(signal_id=signal_id, channel_id=channel, channel_name=name or configured or channel,
+    return dict(valuation=valuation, contract={k: contract.get(k) for k in ('product', 'expiry', 'strike', 'option_type')}, targets_hit=targets_hit, signal_id=signal_id, channel_id=channel, channel_name=name or configured or channel,
                 channel_name_source="recorded at entry" if name else "current settings" if configured else "channel ID",
                 symbol=p.get("contract", {}).get("symbol", "Unfilled signal"), status=p.get("status", "Not entered"),
                 outcome=outcome, entry_price=p.get("entry_fill"), entry_time=p.get("entry_time"),
