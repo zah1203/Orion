@@ -63,6 +63,18 @@ class EngineTests(unittest.TestCase):
         self.quote(170)
         self.assertEqual(self.pos()["status"], "OPEN")
 
+    def test_paper_nse_auction_end_preserves_entry_gate(self):
+        from orion.market_evidence import MarketEvidence
+        market = MarketEvidence()
+        self.msg(text=SIGNAL.replace("BUY 170", "BUY 169-171"))
+        market.observe("nse_fo", 12, "first")
+        self.quote(170, market_open=market.is_open("nse_fo"))
+        self.assertEqual(self.pos()["status"], "PENDING")
+        market.observe("nse_fo", 4, "open")
+        market.observe("nse_fo", 12, "auction-end")
+        out = self.quote(170, market_open=market.is_open("nse_fo"))
+        self.assertEqual(out[0]["event"], "PAPER_BUY")
+
     def test_three_lots_trail_and_close(self):
         self.enter()
         self.assertEqual(self.pos()["lots"], 3)

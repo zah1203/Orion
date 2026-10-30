@@ -312,8 +312,8 @@ async def serve(
         async for m in ws:
             if isinstance(m, SFeedMarketStatus):
                 observed = datetime.now(timezone.utc).isoformat()
-                market_status[m.exchange_segment] = int(m.status_code) in (1, 4)
                 update = market_evidence.observe(m.exchange_segment, m.status_code, observed)
+                market_status[m.exchange_segment] = market_evidence.is_open(m.exchange_segment)
                 if update:
                     print(dumps(update), flush=True)
             elif isinstance(m, SFeedScrip):
