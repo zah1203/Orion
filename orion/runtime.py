@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from .core import Engine, IST, dumps
 from .subscriptions import Subscriptions, active_tokens
 from .feed_health import FeedHealth
+from .message_receipt import record_and_process, failure
 from .market_evidence import MarketEvidence
 
 
@@ -149,16 +150,23 @@ async def serve(
         with account_lock() if account_lock else nullcontext():
             # Read entry permission/settings under the same lock as processing:
             # a dashboard pause/save must not race an event using old limits.
-            refresh_config(locked=True)
-            if event["type"] == "message" and str(event["channel_id"]) not in engine.cfg["channels"]:
-                return
             now = datetime.now(timezone.utc)
-            with engine.db:
-                engine.db.execute(
-                    "INSERT OR IGNORE INTO source_events VALUES(?,?,?)",
-                    (event["event_id"], now.isoformat(), dumps(event)),
+            if event["type"] == "message":
+                cfg = config_provider() if config_provider else engine.cfg
+                results = record_and_process(
+                    engine.db, event, now, cfg["channels"],
+                    lambda: refresh_config(locked=True), engine.process,
                 )
-            results = engine.process(event, now)
+                if results is None:
+                    return
+            else:
+                refresh_config(locked=True)
+                with engine.db:
+                    engine.db.execute(
+                        "INSERT OR IGNORE INTO source_events VALUES(?,?,?)",
+                        (event["event_id"], now.isoformat(), dumps(event)),
+                    )
+                results = engine.process(event, now)
             for result in results:
                 print(dumps(result), flush=True)
             return results
@@ -166,10 +174,6 @@ async def serve(
     async def message(event):
         if event.message.date < boot and not event.message.edit_date:
             return  # never replay old Telegram backlog as new entries
-        if background:
-            background.status(
-                last_message_at=datetime.now(timezone.utc).isoformat(), last_channel=str(event.chat_id)
-            )
         text = event.raw_text or ""
         edited = event.message.edit_date is not None
         digest = hashlib.sha256(text.encode()).hexdigest()
@@ -186,14 +190,29 @@ async def serve(
             )
         )
 
+        if background:
+            background.status(
+                last_message_at=datetime.now(timezone.utc).isoformat(), last_channel=str(event.chat_id)
+            )
+
+    async def guarded_message(event):
+        try:
+            await message(event)
+        except Exception as exc:
+            print(dumps(failure(event, "message", exc)), flush=True)
+
     def selected_channel(event):
-        cfg = config_provider() if config_provider else engine.cfg
-        return str(event.chat_id) in cfg["channels"]
+        try:
+            cfg = config_provider() if config_provider else engine.cfg
+            return str(event.chat_id) in cfg["channels"]
+        except Exception as exc:
+            print(dumps(failure(event, "channel_filter", exc)), flush=True)
+            return False
 
     # Resolve the account's current allowlist for every event, before reading or
     # storing message text. Channel edits therefore require no process restart.
-    telegram.add_event_handler(message, events.NewMessage(func=selected_channel))
-    telegram.add_event_handler(message, events.MessageEdited(func=selected_channel))
+    telegram.add_event_handler(guarded_message, events.NewMessage(func=selected_channel))
+    telegram.add_event_handler(guarded_message, events.MessageEdited(func=selected_channel))
 
     async def watchdog():
         while True:
