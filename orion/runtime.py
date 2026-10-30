@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from .core import Engine, IST, dumps
 from .subscriptions import Subscriptions, active_tokens
 from .feed_health import FeedHealth
+from .market_evidence import MarketEvidence
 
 
 def credentials():
@@ -102,6 +103,7 @@ async def serve(
     boot = datetime.now(timezone.utc)
     last_quote = {}
     market_status = {}
+    market_evidence = MarketEvidence()
 
     def cancel_pending(*, reset_feed=False, locked=False):
         with account_lock() if account_lock and not locked else nullcontext(), engine.db:
@@ -115,6 +117,7 @@ async def serve(
         if reset_feed:
             last_quote.clear()
             market_status.clear()
+            market_evidence.clear()
 
     def refresh_config(*, locked=False):
         if config_provider:
@@ -289,7 +292,11 @@ async def serve(
     async def consume(ws, health):
         async for m in ws:
             if isinstance(m, SFeedMarketStatus):
+                observed = datetime.now(timezone.utc).isoformat()
                 market_status[m.exchange_segment] = int(m.status_code) in (1, 4)
+                update = market_evidence.observe(m.exchange_segment, m.status_code, observed)
+                if update:
+                    print(dumps(update), flush=True)
             elif isinstance(m, SFeedScrip):
                 bids = [x.price for x in m.buy if x.quantity > 0 and x.price > 0]
                 asks = [x.price for x in m.sell if x.quantity > 0 and x.price > 0]
@@ -323,8 +330,12 @@ async def serve(
                             ):
                                 p["status"] = "CANCELLED"
                         engine.db.execute("UPDATE state SET body=? WHERE id=1", (dumps(s),))
+                evidence, warning = market_evidence.quote(m.exchange_segment)
+                if warning:
+                    print(dumps(warning), flush=True)
                 results = ingest(
                     dict(
+                        **evidence,
                         type="quote",
                         event_id=str(uuid.uuid4()),
                         source_time=source.isoformat(),
