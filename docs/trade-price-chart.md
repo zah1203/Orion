@@ -57,3 +57,18 @@ are removed. Show all available candles with 5/10/15/30-minute and 1-hour button
 (default 10 minutes). Existing API ranges and 3-minute aggregation remain for
 compatibility. This is one contract's day view, not an account-wide trade chart.
 The retained-quote cap and missing-history warnings still apply.
+
+## Full retained coverage
+
+Candle aggregation no longer stops at the newest 8,000 quotes. A read-only
+SQLite cursor streams all matching observations within the requested time and
+signal boundaries, deduplicated by source timestamp. In-memory candle storage
+scales with interval buckets, not ticks. Only the legacy sampled-line preview
+retains an 8,000-observation bound; its `line_truncated` flag is separate.
+`first_at`, `last_at`, and `latest` describe the full validated candle input.
+
+The chart axis spans at least 12 hours, extending further for earlier retained
+candles or execution markers. Coverage timestamps disclose what was actually
+recorded. Blank pre-tracking periods and feed gaps are never fabricated. Closed
+trades still stop at final exit. Processing a long retained history can take
+longer than the former capped query; production latency has not been measured.

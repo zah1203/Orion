@@ -14,7 +14,6 @@ export default function TradeChart({ data }: { data: Data }) {
   const chart = data.price_chart;
   const candles: Data[] = chart?.candles?.[interval] || [];
   const intervalMs = Number(interval) * 60000;
-  const points: Data[] = chart?.segments.flat() || [];
   const selected = candles.find((p) => p.at === selectedTime);
   const guides = [
     { label: "Entry", price: data.entry_price, color: "#7bb9ff" },
@@ -22,8 +21,10 @@ export default function TradeChart({ data }: { data: Data }) {
     ...data.targets.map((price: string, i: number) => ({ label: "T" + (i + 1) + (data.targets_hit?.includes(i + 1) ? " hit" : ""), price, color: "#80e1bc" })),
   ].filter((v) => v.price != null && Number.isFinite(Number(v.price)));
   const allMarkers: Data[] = chart?.markers || [];
-  const begin = candles.length ? Date.parse(candles[0].at) : 0;
-  const end = candles.length ? Date.parse(candles[candles.length - 1].at) + intervalMs : begin + intervalMs;
+  const recordedBegin = candles.length ? Date.parse(candles[0].at) : Date.parse(chart?.start || "1970-01-01");
+  const end = candles.length ? Date.parse(candles[candles.length - 1].at) + intervalMs : recordedBegin + intervalMs;
+  const eventBegin = Math.min(recordedBegin, ...allMarkers.map((m) => Date.parse(m.at)));
+  const begin = Math.min(eventBegin, end - 12 * 60 * 60000);
   const markers = allMarkers.filter((m) => Date.parse(m.at) >= begin && Date.parse(m.at) <= end);
   const prices = [...candles.flatMap((p) => [Number(p[series].low), Number(p[series].high)]), ...(levels ? [...markers.map((m) => Number(m.price)), ...guides.map((g) => Number(g.price))] : [])];
   const low = Math.min(...prices, prices[0] || 0), high = Math.max(...prices, prices[0] || 1);
@@ -31,7 +32,7 @@ export default function TradeChart({ data }: { data: Data }) {
   const bottom = low - padding, top = high + padding;
   const x = (at: string) => 56 + (Date.parse(at) - begin) / (end - begin) * 284;
   const y = (price: unknown) => 20 + (top - Number(price)) / (top - bottom) * 210;
-  const latest = points[points.length - 1];
+  const latest = chart?.latest;
   const candleX = (at: string) => x(new Date(Date.parse(at) + intervalMs / 2).toISOString());
   const bodyWidth = Math.max(1, Math.min(12, intervalMs / (end - begin) * 284 * 0.65));
   const inScale = (price: unknown) => Number(price) >= bottom && Number(price) <= top;
@@ -43,6 +44,8 @@ export default function TradeChart({ data }: { data: Data }) {
     </View>
     <View style={s.row}>{["5", "10", "15", "30", "60"].map((v) => <Pressable key={v} accessibilityRole="button" accessibilityState={{ selected: interval === v }} onPress={() => { setInterval(v); setSelectedTime(null); }} style={[s.chip, interval === v && s.active]}><Text style={s.text}>{v === "60" ? "1 hour" : v + " min"}</Text></Pressable>)}</View>
     <Text style={s.note}>{data.status === "CLOSED" ? "Exit day" : "Today"} (IST) · All available candles for this contract. Entries and exits are listed below.</Text>
+    <Text style={s.note}>Minimum 12-hour timeline. Blank periods have no recorded prices; they are not flat candles.</Text>
+    {chart?.first_at && <Text style={s.note}>Recorded coverage: {time(chart.first_at)} – {time(chart.last_at)} IST</Text>}
     <Text style={s.note}>Green = close above open; red = close below open. Candles use recorded quotes, not complete exchange history. Faded candles have incomplete coverage.</Text>
     {chart?.window !== "DAY" ? <Text style={s.note}>Loading selected range…</Text> : candles.length && latest ? <>
       <Text style={s.heading}>{money(latest[series])} <Text style={s.note}>last plotted observation</Text></Text>

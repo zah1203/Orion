@@ -66,8 +66,10 @@ class TradeChartTests(unittest.TestCase):
         for i in range(8002):
             self.quote(i, i, '150' if i == 42 else '50' if i == 44 else '100')
         c = self.get()
-        self.assertTrue(c['truncated'])
-        self.assertEqual(c['observations'], 8000)
+        self.assertFalse(c['truncated'])
+        self.assertTrue(c['line_truncated'])
+        self.assertEqual(c['observations'], 8002)
+        self.assertEqual(sum(b['count'] for b in c['candles']['10']), 8002)
         prices = [float(p['bid']) for seg in c['segments'] for p in seg]
         self.assertEqual((min(prices), max(prices)), (50, 150))
         self.assertLess(len(prices), 750)
@@ -124,3 +126,35 @@ class IntradayTests(TradeChartTests):
         result = self.get('DAY', events)
         self.assertEqual(result['start'], '2026-10-26T18:30:00+00:00')
         self.assertEqual(result['end'], '2026-10-27T10:00:00+00:00')
+
+
+class FullCoverageTests(unittest.TestCase):
+    def test_twelve_hours_survive_old_row_limit_with_early_extreme(self):
+        fixture = TradeChartTests()
+        fixture.setUp()
+        try:
+            for i in range(8641):
+                fixture.quote(i, i * 5, '250' if i == 8640 else '100')
+            result = fixture.get('DAY')
+            candles = result['candles']['10']
+            self.assertEqual(result['observations'], 8641)
+            self.assertEqual(sum(c['count'] for c in candles), 8641)
+            self.assertEqual(max(float(c['ltp']['high']) for c in candles), 250)
+            self.assertEqual((stamp(result['last_at']) - stamp(result['first_at'])).total_seconds(), 43200)
+            self.assertFalse(result['truncated'])
+            self.assertEqual(result['latest']['at'], fixture.now.isoformat())
+        finally:
+            fixture.tearDown()
+
+    def test_duplicate_source_timestamp_counts_once(self):
+        fixture = TradeChartTests()
+        fixture.setUp()
+        try:
+            fixture.quote('a', 5, '100')
+            fixture.quote('b', 5, '110')
+            result = fixture.get()
+            self.assertEqual(result['observations'], 1)
+            self.assertEqual(result['candles']['10'][0]['count'], 1)
+            self.assertEqual(result['latest']['bid'], '110')
+        finally:
+            fixture.tearDown()
