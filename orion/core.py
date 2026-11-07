@@ -495,7 +495,10 @@ class Engine:
                 emit("MARKET_CLOSED_POSITION", signal_id=key)
                 continue
             overnight_cutoff = p.get("overnight") and today > p.get("entry_date_ist", today) and cutoff
-            regular_cutoff = not p.get("overnight") and cutoff
+            entry_date = p.get("entry_date_ist")
+            if not entry_date and p.get("entry_time"):
+                entry_date = stamp(p["entry_time"]).astimezone(IST).date().isoformat()
+            regular_cutoff = not p.get("overnight") and (cutoff or today > (entry_date or today))
             if p.get("exit_requested") or expiry_cutoff or overnight_cutoff or regular_cutoff or bid <= dec(p["stop"]):
                 before_pnl = dec(p["pnl"])
                 sold_lots = p["remaining"]

@@ -85,6 +85,19 @@ class EngineTests(unittest.TestCase):
         self.quote(220)
         self.assertEqual(self.pos()["status"], "CLOSED")
 
+    def test_missed_intraday_cutoff_survives_until_next_eligible_bid(self):
+        self.enter()
+        old_time = self.t.isoformat()
+        self.t = stamp("2026-09-21T10:00:00+05:30")
+        self.quote(225, source_time=old_time)
+        self.quote(225, market_open=False)
+        self.assertEqual(self.pos()["remaining"], 3)
+        out = self.quote(175)
+        self.assertEqual([(e["event"], e["reason"], e["price"]) for e in out],
+                         [("PAPER_EXIT", "CUTOFF", "175")])
+        self.assertEqual(self.pos()["remaining"], 0)
+        self.assertEqual(self.quote(175), [])
+
     def test_one_lot_closes_at_first_target(self):
         self.cfg["max_lots"] = 1
         self.enter()
