@@ -228,6 +228,12 @@ export default function Performance({ userId }: { userId?: string }) {
             {data.entries} {data.entries === 1 ? "entry" : "entries"} filled in
             this period
           </Text>
+          {data.breakdown_mismatch && (
+            <Text accessibilityRole="alert" style={s.warning}>
+              The daily ledger total does not match the instrument breakdown.
+              Review the paper ledger before relying on these figures.
+            </Text>
+          )}
           {data.incomplete_breakdown && (
             <Text style={s.warning}>
               Some older trades span multiple dates without a recorded fee

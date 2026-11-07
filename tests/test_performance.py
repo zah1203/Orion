@@ -97,3 +97,19 @@ class PerformanceTests(unittest.TestCase):
                 self.assertEqual(c.get('/api/performance?instrument=INVALID',headers=h).status_code,422)
                 self.assertEqual(c.get(f'/api/admin/users/{other}/performance',headers=auth('owner')).status_code,200)
                 self.assertEqual(c.get('/api/performance').status_code,401)
+
+    def test_missing_position_flags_mismatch_without_changing_totals(self):
+        self.state['positions'].pop('chan:2')
+        r=self.run_report(period='month')
+        self.assertEqual(r['realized'],'75')
+        self.assertEqual(r['instruments'][0]['realized'],'225')
+        self.assertTrue(r['breakdown_mismatch'])
+    def test_consistent_totals_do_not_warn(self):
+        self.assertFalse(self.run_report(period='month')['breakdown_mismatch'])
+    def test_legacy_unknown_breakdown_is_not_claimed_mismatched(self):
+        self.records=[]
+        r=self.run_report(period='week')
+        self.assertTrue(r['incomplete_breakdown'])
+        self.assertFalse(r['breakdown_mismatch'])
+    def test_filtered_instrument_does_not_compare_unfiltered_ledger(self):
+        self.assertFalse(self.run_report(period='month',instrument='NIFTY')['breakdown_mismatch'])
