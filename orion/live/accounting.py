@@ -256,6 +256,11 @@ class Accounting:
                 if not row:
                     raise Refused('Contract multiplier required')
                 multiplier = amount(row[0])
+                body = json.loads(self.ledger.get(tag)['body'])
+                if fill['segment'] == 'mcx_fo' or body['segment'] == 'mcx_fo':
+                    from .entry_plans import bound_quantity_multiplier
+                    if fill['segment'] != body['segment'] or multiplier != bound_quantity_multiplier(self.ledger, tag):
+                        raise Refused('Bound MCX accounting economics required')
                 queue = lots.setdefault(tag, deque())
                 if fill['trade_day'] == day:
                     correction = self.db.execute('''SELECT total_fee FROM fee_corrections

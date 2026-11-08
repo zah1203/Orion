@@ -122,3 +122,16 @@ class EntryPlanTests(unittest.TestCase):
         ledger.db.execute('UPDATE live_signals SET signal_time=?', ((self.now-timedelta(seconds=31)).isoformat(),))
         with self.assertRaises(Refused): self.plans.bind(self.tag)
         self.assertFalse(ledger.db.execute('SELECT 1 FROM entry_exit_plans').fetchone())
+
+    def test_stop_fallback_is_opt_in_and_bound_before_dispatch(self):
+        for invalid in ('true', 1, None):
+            with self.assertRaises(Refused): validate_limits(LIMITS | dict(stop_gap_ticks=20, stop_fallback=invalid))
+        with self.assertRaises(Refused): validate_limits(LIMITS | dict(stop_fallback=True))
+        self.pilot.configure(self.owner, self.owner, LIMITS | dict(stop_gap_ticks=20, stop_fallback=True))
+        self.pilot.consent(self.owner, 2)
+        ledger = self.prepare()
+        plan = self.plans.bind(self.tag)
+        self.assertEqual(plan['stop_limit'], '89.00')
+        self.assertEqual(ledger.db.execute('SELECT entry_tag FROM stop_fallback_policy').fetchone()[0], self.tag)
+        self.assertFalse(ledger.db.execute('SELECT 1 FROM broker_commands').fetchone())
+        self.assertTrue(self.pilot.preferences(self.owner, self.owner)['execution']['stop_fallback'])

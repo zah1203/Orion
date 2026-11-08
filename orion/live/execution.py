@@ -99,6 +99,8 @@ class ExecutionHarness:
             self.ledger._check_incidents()
             row = self.ledger.get(tag)
             body = json.loads(row['body'])
+            if body['segment'] != 'nse_fo':
+                raise Refused('Harness dispatch supports NSE NRML only')
             if not 0 <= (now-datetime.fromisoformat(body['signal_time'])).total_seconds() <= 30:
                 raise Refused('Signal expired before dispatch')
             terms = self.ledger.db.execute('SELECT * FROM execution_terms WHERE tag=?', (tag,)).fetchone()
@@ -119,8 +121,10 @@ class ExecutionHarness:
                 if candidate['fee_reserve'] is None:
                     raise Refused('Unaccounted reservation')
                 candidate_body = json.loads(candidate['body'])
-                reserved += amount(candidate_body['limit_price'])*units + amount(candidate['fee_reserve'])
-                reserved_risk += (amount(candidate_body['limit_price'])-amount(candidate['stop'])) * units + amount(candidate['fee_reserve'])
+                from .entry_plans import bound_quantity_multiplier
+                multiplier = bound_quantity_multiplier(self.ledger, candidate['tag'])
+                reserved += amount(candidate_body['limit_price'])*units*multiplier + amount(candidate['fee_reserve'])
+                reserved_risk += (amount(candidate_body['limit_price'])-amount(candidate['stop'])) * units*multiplier + amount(candidate['fee_reserve'])
             if reserved > min(amount(self.limits['capital']), amount(self.limits['max_open_premium']), bounded_amount(available_cash)):
                 raise Refused('Reserved premium exceeds available budget')
             trade_risk = (amount(body['limit_price'])-amount(terms['stop'])) * body['quantity'] + amount(terms['fee_reserve'])

@@ -55,7 +55,9 @@ class EntryPreparation:
             realized_loss=candidate['risk']['loss_used'], allow_protected=True)
         tag = row['tag']
         self.reconciliation.bind_instrument(tag, product='NRML', token=candidate['token'])
-        self.accounting.bind_multiplier(tag, 1)
+        from .entry_risk import candidate_quantity_multiplier
+        self.accounting.bind_multiplier(tag, candidate_quantity_multiplier(
+            self.ledger, candidate, datetime.now(timezone.utc)))
         self.db.execute('INSERT INTO execution_terms VALUES(?,?,?,?,?)',
             (tag, candidate['stop'], candidate['tick'], candidate['lot_size'], limits['fee_reserve']))
         self.plans._bind_locked(tag)
