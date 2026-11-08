@@ -24,16 +24,21 @@ def collect_marks(ledger, session):
         body = json.loads(entry['body'])
         instrument = ledger.db.execute('SELECT * FROM reconciliation_instruments WHERE entry_tag=?', (entry['tag'],)).fetchone()
         terms = ledger.db.execute('SELECT tick FROM execution_terms WHERE tag=?', (entry['tag'],)).fetchone()
-        if not instrument or not terms or body['segment'] != 'nse_fo' or instrument['product'] != 'NRML':
-            raise Refused('Bound NSE exposure required')
+        if not instrument or not terms or body['segment'] not in ('nse_fo', 'mcx_fo') or instrument['product'] != 'NRML':
+            raise Refused('Bound derivatives exposure required')
+        if body['segment'] == 'mcx_fo':
+            from .entry_plans import bound_quantity_multiplier
+            bound_quantity_multiplier(ledger, entry['tag'])
         token, symbol = instrument['token'], body['symbol']
-        if token in expected and expected[token] != symbol:
+        key = (body['segment'], token)
+        if key in expected and expected[key] != symbol:
             raise Refused('Conflicting instrument identity')
-        expected[token] = symbol
-        entries.append((entry['tag'], token, amount(terms['tick'])))
+        expected[key] = symbol
+        entries.append((entry['tag'], key, amount(terms['tick'])))
     if not entries:
         return {}
-    requested = [dict(token=token, symbol=symbol) for token, symbol in expected.items()]
+    requested = [dict(token=token, symbol=symbol, **({'segment': segment} if segment != 'nse_fo' else {}))
+                 for (segment, token), symbol in expected.items()]
     instruments(requested)
     response = session.request('quotes', instruments=requested)
     now = datetime.now(timezone.utc)
@@ -46,8 +51,8 @@ def collect_marks(ledger, session):
     for row in quotes:
         if not isinstance(row, dict):
             raise Refused('Invalid bound quote')
-        token = row.get('token')
-        if token not in expected or token in prices or row.get('symbol') != expected[token] or row.get('segment') != 'nse_fo':
+        key = (row.get('segment'), row.get('token'))
+        if key not in expected or key in prices or row.get('symbol') != expected[key]:
             raise Refused('Quote contract mismatch')
         at = timestamp(datetime.fromisoformat(row['quoted_at']))
         observed = timestamp(datetime.fromisoformat(row['observed_at']))
@@ -56,10 +61,10 @@ def collect_marks(ledger, session):
         bid, ask = bounded_amount(row.get('bid')), bounded_amount(row.get('ask'))
         if not 0 < bid <= ask:
             raise Refused('Valid broker depth required')
-        prices[token] = (bid, ask, at)
+        prices[key] = (bid, ask, at)
     result = {}
-    for tag, token, tick in entries:
-        bid, ask, at = prices[token]
+    for tag, key, tick in entries:
+        bid, ask, at = prices[key]
         if tick <= 0 or bid % tick or ask % tick:
             raise Refused('Tick-aligned broker depth required')
         result[tag] = (str(bid), at)

@@ -5,7 +5,7 @@ adapter must reconcile full broker state and protective exits before activation.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 import hashlib
 import json
 import os
@@ -176,6 +176,33 @@ class Ledger:
         body = dict(symbol=symbol, segment=segment, quantity=lots * lot_size,
                     limit_price=str(price), premium=str(price * lots * lot_size),
                     signal_time=signal_time.isoformat(), side="BUY", mode="live")
+        multiplier = Decimal(1)
+        if segment == 'mcx_fo':
+            # Only the admitted source can select commodity money units. A
+            # caller-supplied multiplier or a product-name default is forbidden.
+            if not self.db.in_transaction or not self.db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='live_signals'").fetchone():
+                raise Refused('Atomic admitted MCX reservation required')
+            source = self.db.execute('SELECT * FROM live_signals WHERE source=?', (event,)).fetchone()
+            if not source or source['state'] not in ('PENDING', 'RESERVED'):
+                raise Refused('Admitted MCX reservation source required')
+            from .commodity import validate_saved_contract
+            from .accounting import timestamp
+            from datetime import datetime
+            try:
+                normalized = json.loads(source['body'])
+                contract, signal = normalized['contract'], normalized['signal']
+                economics = validate_saved_contract(contract, now)
+                if (contract['segment'] != segment or contract['symbol'] != symbol or
+                        economics.order_quantity_per_lot != lot_size or economics.tick_size != tick or
+                        timestamp(datetime.fromisoformat(source['signal_time'])) != timestamp(signal_time) or
+                        not amount(signal['entry_low']) <= price <= amount(signal['entry_high'])):
+                    raise Refused('MCX reservation does not match admitted source')
+                multiplier = economics.rupees_per_quantity_point
+                body.update(source_digest=source['digest'], quantity_multiplier=str(multiplier),
+                            premium=str(economics.premium(price, lots)))
+            except (KeyError, TypeError, ValueError):
+                raise Refused('MCX reservation does not match admitted source') from None
         encoded = json.dumps(body, sort_keys=True)
         tag = "orion" + hashlib.sha256((self.account + ':' + event).encode()).hexdigest()[:24]
         with self.transaction():
@@ -194,9 +221,16 @@ class Ledger:
             day = now.astimezone(ZoneInfo('Asia/Kolkata')).date()
             if sum(datetime.fromisoformat(json.loads(r['body'])['signal_time']).astimezone(ZoneInfo('Asia/Kolkata')).date() == day for r in rows) >= limits.max_entries:
                 raise Refused("Entry limit reached")
-            used = sum((amount(json.loads(r['body'])['limit_price'])*self.reserved_units(r) for r in rows), Decimal(0))
-            if used + price * lots * lot_size > limits.max_premium:
-                raise Refused("Premium budget exceeded")
+            from .entry_plans import bound_quantity_multiplier
+            with localcontext() as ctx:
+                ctx.prec = 80
+                used = Decimal(0)
+                for r in rows:
+                    units = self.reserved_units(r)
+                    if units:
+                        used += amount(json.loads(r['body'])['limit_price'])*units*bound_quantity_multiplier(self, r['tag'])
+                if used + price * lots * lot_size * multiplier > limits.max_premium:
+                    raise Refused("Premium budget exceeded")
             self.db.execute("INSERT INTO intents(tag,event,body,status) VALUES(?,?,?,'PREPARED')",
                             (tag, event, encoded))
         return self.get(tag)

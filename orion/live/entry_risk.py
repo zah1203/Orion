@@ -5,6 +5,7 @@ fee provenance must be established by reviewed broker adapters before a future
 atomic dispatch gate can use these calculations.
 """
 from datetime import datetime
+from decimal import localcontext
 import json
 
 from .accounting import IST, bounded_amount, timestamp
@@ -13,7 +14,59 @@ from .pilot import validate_limits
 from .reconciliation import require_current
 
 
+def candidate_quantity_multiplier(ledger, candidate, now):
+    """Validate the admitted MCX source before using quantity-unit economics."""
+    source = None
+    if ledger.db.execute("SELECT 1 FROM sqlite_master WHERE name='live_signals'").fetchone():
+        source = ledger.db.execute('SELECT * FROM live_signals WHERE source=?', (candidate['source'],)).fetchone()
+    source_segment = json.loads(source['body'])['contract']['segment'] if source else None
+    if 'segment' not in candidate and any(key in candidate for key in (
+            'commodity_evidence', 'quantity_multiplier', 'premium_multiplier')):
+        raise Refused('Explicit candidate segment required for contract economics')
+    segment = candidate.get('segment', 'nse_fo')  # Legacy standalone NSE risk fixtures.
+    if source_segment is not None and source_segment != segment:
+        raise Refused('Candidate source segment mismatch')
+    if segment == 'nse_fo':
+        return amount(1)
+    if segment != 'mcx_fo':
+        raise Refused('Unsupported candidate segment')
+    if not source or source['state'] != 'PENDING':
+        raise Refused('Admitted MCX source required')
+    from .commodity import validate_saved_contract
+    try:
+        normalized = json.loads(source['body'])
+        contract, signal = normalized['contract'], normalized['signal']
+        economics = validate_saved_contract(contract, now)
+        factor = economics.rupees_per_quantity_point
+        if (candidate['source_digest'] != source['digest'] or
+                candidate['policy_version'] != source['policy_version'] or
+                candidate['commodity_evidence'] != contract['commodity_evidence'] or
+                candidate['segment'] != contract['segment'] or candidate['symbol'] != contract['symbol'] or
+                candidate['token'] != contract['token'] or
+                candidate['lot_size'] != economics.order_quantity_per_lot or
+                bounded_amount(candidate['tick']) != economics.tick_size or
+                bounded_amount(candidate['premium_multiplier']) != economics.premium_rupees_per_lot_point or
+                bounded_amount(candidate['quantity_multiplier']) != factor or
+                bounded_amount(candidate['stop']) != bounded_amount(signal['stop']) or
+                candidate['targets'] != signal['targets'] or
+                candidate['quantity'] != economics.broker_quantity(candidate['lots']) or
+                not bounded_amount(signal['entry_low']) <= bounded_amount(candidate['limit_price']) <= bounded_amount(signal['entry_high'])):
+            raise Refused('MCX candidate economics mismatch')
+        economics.aligned_price(candidate['limit_price'])
+        return factor
+    except (KeyError, TypeError, ValueError):
+        raise Refused('MCX candidate economics mismatch') from None
+
+
 def assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, policy=None):
+    # Preserve exact monetary arithmetic independently of caller Decimal context.
+    with localcontext() as ctx:
+        ctx.prec = 80
+        return _assess(ledger, accounting, limits, candidate, now=now,
+                       marks=marks, cash=cash, policy=policy)
+
+
+def _assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, policy=None):
     if not ledger.db.in_transaction:
         raise Refused('Transactional risk snapshot required')
     if accounting.ledger is not ledger or candidate['account'] != ledger.account:
@@ -28,6 +81,7 @@ def assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, poli
             raise Refused('Initialized execution risk ledger required')
     limits = validate_limits(limits)
     now = timestamp(now)
+    multiplier = candidate_quantity_multiplier(ledger, candidate, now)
     require_current(ledger)
     # Additional exposure requires complete observed stop coverage and stable
     # per-position exit plans, not merely a calculated account budget.
@@ -60,8 +114,10 @@ def assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, poli
             raise Refused('Invalid reserved stop risk')
         # Policy increases cannot leave older prepared orders under-reserved.
         fee = max(bounded_amount(terms['fee_reserve']), amount(limits['fee_reserve']))
-        premium += price*units + fee
-        risk += (price-stop)*units + fee
+        from .entry_plans import bound_quantity_multiplier
+        reserved_multiplier = bound_quantity_multiplier(ledger, row['tag'])
+        premium += price*units*reserved_multiplier + fee
+        risk += (price-stop)*units*reserved_multiplier + fee
     if len(counted) >= limits['max_entries']:
         raise Refused('Daily entry capacity exhausted')
     price, stop = bounded_amount(candidate['limit_price']), bounded_amount(candidate['stop'])
@@ -75,8 +131,8 @@ def assess(ledger, accounting, limits, candidate, *, now, marks, cash=None, poli
         # fill. A trade journal alone cannot account for these possible charges.
         loss += max(amount(0), amount(cash_snapshot['fee_hold'])-amount(summary['fees']))
     for lots in range(maximum, 0, -1):
-        debit = price*lot*lots + fee
-        projected_risk = (price-stop)*lot*lots + fee
+        debit = price*lot*lots*multiplier + fee
+        projected_risk = (price-stop)*lot*lots*multiplier + fee
         if ((cash_snapshot is None or debit <= amount(cash_snapshot['remaining'])) and
                 debit <= amount(limits['max_order_premium']) and
                 premium+debit <= min(amount(limits['capital']), amount(limits['max_open_premium'])) and

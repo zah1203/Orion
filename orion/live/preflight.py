@@ -31,9 +31,11 @@ def funding_preflight(router, session, source, *, accounting, marks, cash=None, 
     if session.ucc != router.ucc:
         raise Refused('Funding session account mismatch')
     candidate = router.quote(source, accounting=accounting, marks=marks, cash=cash, **quote)
+    if candidate['segment'] != 'nse_fo':
+        raise Refused('MCX funding preflight unavailable pending verified cash and margin semantics')
     request = OrderRequest(
         tag='probe'+hashlib.sha256(source.encode()).hexdigest()[:32],
-        symbol=candidate['symbol'], quantity=candidate['quantity'],
+        symbol=candidate['symbol'], segment=candidate['segment'], quantity=candidate['quantity'],
         lot_size=candidate['lot_size'], tick=candidate['tick'],
         price=candidate['limit_price'], kind='ENTRY')
     parameters = request.parameters()
@@ -50,6 +52,7 @@ def funding_preflight(router, session, source, *, accounting, marks, cash=None, 
         if (time.monotonic()-clock > 5 or not started <= begin <= end <= now or
                 not 0 <= (now-before).total_seconds() <= 5 or not before <= after <= end or
                 evidence['ucc'] != router.ucc or evidence['token'] != candidate['token'] or
+                evidence.get('segment', 'nse_fo') != candidate['segment'] or
                 evidence['symbol'] != candidate['symbol'] or
                 type(evidence['quantity']) is not int or evidence['quantity'] != request.quantity or
                 bounded_amount(evidence['price']) != bounded_amount(parameters['price'])):

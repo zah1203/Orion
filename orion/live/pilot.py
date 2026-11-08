@@ -12,9 +12,13 @@ COUNTS = ('max_lots', 'max_entries', 'stop_gap_ticks', 'target_timeout_seconds')
 
 
 def validate_limits(values):
-    if not isinstance(values, dict) or set(values) != set(MONEY + COUNTS):
+    if not isinstance(values, dict) or set(values) - {'stop_fallback'} != set(MONEY + COUNTS):
         raise Refused('Explicit pilot limits required')
     result = {}
+    if 'stop_fallback' in values:
+        if type(values['stop_fallback']) is not bool or (values['stop_fallback'] and values['stop_gap_ticks'] != 20):
+            raise Refused('Stop fallback requires explicit consent and a 20-tick initial gap')
+        result['stop_fallback'] = values['stop_fallback']
     for name in MONEY:
         v = amount(values[name])
         if isinstance(values[name], bool) or not 0 < v <= 100000000 or v.as_tuple().exponent < -2:
@@ -80,14 +84,14 @@ class Pilot:
             policy = db.execute('SELECT limits FROM live_pilots WHERE uid=?', (uid,)).fetchone()
             previous = json.loads(policy[0]) if policy else {}
             execution = {key: previous[key] for key in ('fee_reserve', 'stop_gap_ticks',
-                         'target_timeout_seconds') if key in previous}
+                         'target_timeout_seconds', 'stop_fallback') if key in previous}
             return dict(preferences=json.loads(row[0]) if row else None, execution=execution, applied=False,
                         order_submission_available=False)
 
     def configure_simple(self, actor, uid, values):
         """Derive capital/risk caps; execution assumptions must remain explicit."""
         execution = ('fee_reserve', 'stop_gap_ticks', 'target_timeout_seconds')
-        if not isinstance(values, dict) or set(values) != set(PREFERENCES + execution):
+        if not isinstance(values, dict) or set(values) - {'stop_fallback'} != set(PREFERENCES + execution):
             raise Refused('Five risk values and reviewed fee and exit settings required')
         limits = dict(values, max_order_premium=values['capital'],
                       max_open_premium=values['capital'], max_open_risk=values['daily_loss'])
